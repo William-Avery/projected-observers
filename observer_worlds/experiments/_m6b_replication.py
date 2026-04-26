@@ -621,6 +621,42 @@ def run_replication_for_rule_seed(
 # ---------------------------------------------------------------------------
 
 
+def _run_replication_for_parallel(
+    item: tuple[FractionalRule, str, str, int, str], shared: dict
+) -> list[M6BRow]:
+    rule, rule_id, rule_source, seed, condition = item
+    return run_replication_for_rule_seed(
+        rule=rule, rule_id=rule_id, rule_source=rule_source,
+        seed=seed,
+        grid_shape=shared["grid_shape"],
+        timesteps=shared["timesteps"],
+        max_candidates_per_mode=shared["max_candidates_per_mode"],
+        horizons=shared["horizons"],
+        n_replicates=shared["n_replicates"],
+        backend=shared["backend"],
+        condition=condition,
+        workdir_for_zarr=shared["workdir_for_zarr"],
+        progress=None,
+    )
+
+
+class _M6BParallelTask:
+    """Picklable task dispatcher for parallel_sweep.
+
+    joblib loky pickles the callable by reference (qualified name) and
+    re-imports it in the worker; nested closures aren't picklable. This
+    class binds the per-sweep ``shared`` dict to a top-level callable.
+    """
+
+    def __init__(self, shared: dict) -> None:
+        self.shared = shared
+
+    def __call__(
+        self, item: tuple[FractionalRule, str, str, int, str]
+    ) -> list[M6BRow]:
+        return _run_replication_for_parallel(item, self.shared)
+
+
 def run_m6b_replication(
     *,
     rules: list[tuple[FractionalRule, str, str]],   # (rule, rule_id, rule_source)
@@ -634,42 +670,58 @@ def run_m6b_replication(
     include_per_step_shuffled: bool = True,
     workdir_for_zarr=None,
     progress: Callable[[str], None] | None = None,
+    n_workers: int | None = None,
 ) -> list[M6BRow]:
     """Driver. Returns a flat list of M6BRow across all
-    (rule, seed, condition, candidate, intervention, replicate, horizon)."""
-    rows: list[M6BRow] = []
-    n_total = len(rules) * len(seeds)
-    n_done = 0
+    (rule, seed, condition, candidate, intervention, replicate, horizon).
+
+    Work is parallelized over (rule, seed, condition) tuples via
+    ``parallel_sweep``. Default ``n_workers`` is ``cpu_count - 2``; on
+    machines with <= 2 cores this resolves to 1 and the serial path is
+    used. Pass ``n_workers=1`` explicitly to force serial.
+    """
+    from observer_worlds.parallel import parallel_sweep
+
+    conditions = ["coherent_4d"]
+    if include_per_step_shuffled:
+        conditions.append("per_step_hidden_shuffled_4d")
+
+    items: list[tuple[FractionalRule, str, str, int, str]] = [
+        (rule, rule_id, rule_source, seed, condition)
+        for rule, rule_id, rule_source in rules
+        for seed in seeds
+        for condition in conditions
+    ]
+
+    shared = {
+        "grid_shape": grid_shape,
+        "timesteps": timesteps,
+        "max_candidates_per_mode": max_candidates_per_mode,
+        "horizons": horizons,
+        "n_replicates": n_replicates,
+        "backend": backend,
+        "workdir_for_zarr": workdir_for_zarr,
+    }
+
+    # Forward live per-task lines to stderr when a progress callback is
+    # provided -- otherwise long sweeps go silent for hours.
+    verbose = 10 if progress is not None else 0
+
     t0 = time.time()
-    for rule, rule_id, rule_source in rules:
-        for seed in seeds:
-            n_done += 1
-            elapsed = time.time() - t0
-            eta = (elapsed / n_done) * (n_total - n_done) if n_done > 0 else 0.0
-            if progress is not None:
-                progress(
-                    f"  [{n_done}/{n_total}] rule={rule_id} src={rule_source} "
-                    f"seed={seed}  elapsed={elapsed:.0f}s eta={eta:.0f}s"
-                )
-            # Coherent run.
-            rows.extend(run_replication_for_rule_seed(
-                rule=rule, rule_id=rule_id, rule_source=rule_source,
-                seed=seed, grid_shape=grid_shape, timesteps=timesteps,
-                max_candidates_per_mode=max_candidates_per_mode,
-                horizons=horizons, n_replicates=n_replicates,
-                backend=backend, condition="coherent_4d",
-                workdir_for_zarr=workdir_for_zarr,
-                progress=progress,
-            ))
-            # Per-step-shuffled run (optional).
-            if include_per_step_shuffled:
-                rows.extend(run_replication_for_rule_seed(
-                    rule=rule, rule_id=rule_id, rule_source=rule_source,
-                    seed=seed, grid_shape=grid_shape, timesteps=timesteps,
-                    max_candidates_per_mode=max_candidates_per_mode,
-                    horizons=horizons, n_replicates=n_replicates,
-                    backend=backend, condition="per_step_hidden_shuffled_4d",
-                    workdir_for_zarr=workdir_for_zarr,
-                    progress=progress,
-                ))
+    flat_results = parallel_sweep(
+        items,
+        _M6BParallelTask(shared),
+        n_workers=n_workers,
+        progress=progress,
+        verbose=verbose,
+    )
+    elapsed = time.time() - t0
+    if progress is not None:
+        progress(
+            f"  m6b sweep wall time {elapsed:.0f}s "
+            f"({len(items)} runs across {len(rules)} rules x "
+            f"{len(seeds)} seeds x {len(conditions)} conditions)"
+        )
+
+    rows: list[M6BRow] = [row for sublist in flat_results for row in sublist]
     return rows

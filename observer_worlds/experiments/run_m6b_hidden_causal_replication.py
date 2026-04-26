@@ -57,6 +57,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Reduce defaults: n_rules=1, seeds=1, T=80, "
                         "grid 16x16x4x4, max_candidates=3, replicates=2, "
                         "horizons=[5,10], no per_step_shuffled.")
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="Process-parallelism: number of worker processes "
+                        "for the (rule, seed, condition) sweep. Default: cpu_count-2.")
     return p
 
 
@@ -305,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         include_per_step_shuffled=not args.no_per_step_shuffled,
         workdir_for_zarr=workdir,
         progress=print,
+        n_workers=args.n_workers,
     )
     elapsed = time.time() - t0
     print(f"\nGenerated {len(rows)} rows in {elapsed:.0f}s")
