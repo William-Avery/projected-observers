@@ -135,6 +135,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Reduce defaults for a fast smoke test: "
                         "n_rules=2, seeds=2, T=100, grid 32x32x4x4, "
                         "n_bootstrap=500, n_permutations=500.")
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="Process-parallelism: number of worker processes "
+                        "for the sweep. Default: cpu_count-2. Use 1 for "
+                        "serial (debugging).")
     return p
 
 
@@ -229,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         video_frames_kept=args.video_frames_kept,
         snapshots_per_run=args.snapshots_per_run,
         progress=print,
+        n_workers=args.n_workers,
     )
     sweep_seconds = time.time() - t0
     print(f"sweep done in {sweep_seconds:.0f}s")
