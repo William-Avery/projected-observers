@@ -498,6 +498,55 @@ The headline interpretation, written carefully: **M7's hidden causal support amo
 > global_chaotic rate by giving the far-mask a more distant antipode,
 > and (c) get matched-N thick comparisons against M4C/M4A.
 
+### M8C — Large-grid mechanism validation
+
+> **Why**: M8B's three caveats — N_thick=11, 36% global_chaotic among
+> thick M7 candidates, and a 48×48 grid where the antipode translation
+> was only ~24 cells from the candidate centroid — all point at the
+> same fix: a larger grid with stronger far-control geometry. M8C
+> implements that. The experiment asks: **does the M8B
+> "interior-dominant whole-body" mechanism replicate when the
+> geometry is large enough to cleanly separate candidate, local
+> environment, and far controls?**
+
+Implements:
+
+- **Adaptive far-mask selection** (`_m8c_validation.select_far_mask`)
+  that searches a grid of candidate translations and picks one with
+  (a) periodic distance ≥ `max(32, 5 × candidate_radius)`, (b) zero
+  overlap with the candidate's `dilation(3)` environment shell, and
+  (c) minimal `|projected_activity_diff| + |hidden_activity_diff|` so
+  the far region looks dynamically similar. Candidates with no valid
+  far mask are flagged `far_control_invalid` and are NOT eligible for
+  `global_chaotic` — that classification requires a meaningful far
+  control.
+- **`run_m8c_large_grid_mechanism_validation.py`** CLI that simulates
+  rule×seed pairs at default grid 96×96×8×8 / T=600 / 40 test seeds
+  (8000–8039, disjoint from M7 train/validation and M7B/M8 test seeds)
+  and runs M8B's region-aware response measurement on every
+  observer-candidate, reusing the v2 classifier.
+- New per-candidate columns: `candidate_radius`, `candidate_diameter`,
+  `far_control_distance`, `far_control_distance_over_radius`,
+  `far_control_valid`, `far_control_projected_activity_diff`,
+  `far_control_hidden_activity_diff`.
+- Six CSVs (`morphology_gates.csv`, `far_control_quality.csv`,
+  `region_response_metrics.csv`, `mechanism_labels.csv`,
+  `candidate_summary.csv`, `condition_summary.csv`), 12 plots,
+  `frozen_manifest.json` reusing M7B's machinery, and `summary.md`
+  with five canonical interpretation paragraphs:
+  - *"Large-grid M8C confirms M7's hidden causal support is primarily interior/whole-body, not boundary-mediated."* (interior_reservoir + whole_body ≥ 50%, boundary < 20%, env < 20%)
+  - *"M8C revises M8B: boundary mediation becomes visible once morphology is sufficiently resolved."* (boundary_mediated ≥ 40% at large grid)
+  - *"Hidden support is local-environment mediated rather than internal-body mediated."* (env_coupled ≥ 40%)
+  - *"M7 HCE may reflect broad dynamical instability rather than localized hidden support."* (global_chaotic ≥ 40% even with strong far controls)
+  - *"M7 uniquely produces thick hidden-supported candidates under this search regime; matched thick-baseline comparison remains unavailable."* (M4C 0 thick, M4A < 5 thick)
+
+> **Status**: M8C code is implemented; smoke test produces full
+> outputs (12 plots, 6 CSVs, frozen manifest, summary.md). 15 new
+> tests pass; 297-test full suite has no regressions. **The empirical
+> large-grid validation is pending** — a real run with grid 96×96×8×8
+> × T=600 × 40 test seeds × 9 rules takes substantial compute and has
+> not yet been executed.
+
 ## Key findings
 
 | Question | Result |
