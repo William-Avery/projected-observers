@@ -44,6 +44,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-root", type=str, default="outputs")
     p.add_argument("--label", type=str, default="m8")
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="Process-parallelism: number of worker processes "
+                        "for the (rule, seed) sweep. Default: cpu_count-2.")
     return p
 
 
@@ -290,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         timesteps=args.timesteps, max_candidates=args.max_candidates,
         horizons=args.horizons, n_replicates=args.hce_replicates,
         backend=args.backend, workdir=workdir, progress=print,
+        n_workers=args.n_workers,
     )
     elapsed = time.time() - t0
     print(f"\nMeasured {len(results)} candidates in {elapsed:.0f}s")

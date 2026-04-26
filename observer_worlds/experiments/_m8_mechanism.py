@@ -905,6 +905,55 @@ def run_m8_for_rule_seed(
     return results
 
 
+def _run_m8_for_parallel(
+    item: tuple, shared: dict
+) -> list[M8CandidateResult]:
+    """Worker dispatch for ``parallel_sweep``.
+
+    Unpacks ``(rule, rule_id, rule_source, seed)`` and calls
+    ``run_m8_for_rule_seed`` with the per-sweep ``shared`` params. Catches
+    per-task exceptions and logs them, returning ``[]`` so a single bad
+    (rule, seed) doesn't sink the whole sweep — matches the original
+    serial behaviour.
+    """
+    import sys
+    rule, rule_id, rule_source, seed = item
+    try:
+        return run_m8_for_rule_seed(
+            rule=rule, rule_id=rule_id, rule_source=rule_source,
+            seed=seed,
+            grid_shape=shared["grid_shape"],
+            timesteps=shared["timesteps"],
+            max_candidates=shared["max_candidates"],
+            horizons=shared["horizons"],
+            n_replicates=shared["n_replicates"],
+            backend=shared["backend"],
+            workdir=shared["workdir"],
+            progress=None,
+        )
+    except Exception as e:
+        print(
+            f"    m8 error rule={rule_id} src={rule_source} seed={seed}: {e}",
+            file=sys.stderr,
+        )
+        return []
+
+
+class _M8ParallelTask:
+    """Picklable task dispatcher for ``parallel_sweep``.
+
+    joblib loky pickles the callable by reference (qualified name) and
+    re-imports it in the worker; nested closures aren't picklable. This
+    class binds the per-sweep ``shared`` dict to a top-level callable.
+    """
+
+    def __init__(self, shared: dict) -> None:
+        self.shared = shared
+
+    def __call__(self, item: tuple) -> list[M8CandidateResult]:
+        return _run_m8_for_parallel(item, self.shared)
+
+
 def run_m8_mechanism_discovery(
     *,
     rules: list[tuple],          # (rule, rule_id, rule_source)
@@ -913,29 +962,60 @@ def run_m8_mechanism_discovery(
     max_candidates: int, horizons: list[int],
     n_replicates: int, backend: str,
     workdir, progress=None,
+    n_workers: int | None = None,
 ) -> list[M8CandidateResult]:
-    out: list[M8CandidateResult] = []
-    n_total = len(rules) * len(seeds)
-    n_done = 0
+    """Driver. Returns a flat list of ``M8CandidateResult`` across all
+    (rule, seed, candidate).
+
+    Work is parallelized over (rule, seed) tuples via ``parallel_sweep``.
+    Default ``n_workers`` is ``cpu_count - 2``; on machines with <= 2
+    cores this resolves to 1 and the serial path is used. Pass
+    ``n_workers=1`` explicitly to force serial.
+    """
+    from pathlib import Path
+
+    from observer_worlds.parallel import parallel_sweep
+
+    items: list[tuple] = [
+        (rule, rule_id, rule_source, seed)
+        for rule, rule_id, rule_source in rules
+        for seed in seeds
+    ]
+
+    shared = {
+        "grid_shape": grid_shape,
+        "timesteps": timesteps,
+        "max_candidates": max_candidates,
+        "horizons": horizons,
+        "n_replicates": n_replicates,
+        "backend": backend,
+        # Normalize to Path so workers (and the serial path) can do
+        # ``workdir / f"{rule_id}_seed{seed}"`` even if a string was
+        # passed in.
+        "workdir": Path(workdir),
+    }
+
+    # Forward live per-task lines to stderr when a progress callback is
+    # provided -- otherwise long sweeps go silent for hours.
+    verbose = 10 if progress is not None else 0
+
     t0 = time.time()
-    for rule, rule_id, rule_source in rules:
-        for seed in seeds:
-            n_done += 1
-            elapsed = time.time() - t0
-            eta = (elapsed / n_done) * (n_total - n_done) if n_done > 0 else 0.0
-            if progress:
-                progress(f"  [{n_done}/{n_total}] rule={rule_id} src={rule_source} "
-                         f"seed={seed} elapsed={elapsed:.0f}s eta={eta:.0f}s")
-            try:
-                rs = run_m8_for_rule_seed(
-                    rule=rule, rule_id=rule_id, rule_source=rule_source,
-                    seed=seed, grid_shape=grid_shape, timesteps=timesteps,
-                    max_candidates=max_candidates, horizons=horizons,
-                    n_replicates=n_replicates, backend=backend,
-                    workdir=workdir, progress=progress,
-                )
-                out.extend(rs)
-            except Exception as e:
-                if progress:
-                    progress(f"    error: {e}")
+    flat_results = parallel_sweep(
+        items,
+        _M8ParallelTask(shared),
+        n_workers=n_workers,
+        progress=progress,
+        verbose=verbose,
+    )
+    elapsed = time.time() - t0
+    if progress is not None:
+        progress(
+            f"  m8 sweep wall time {elapsed:.0f}s "
+            f"({len(items)} runs across {len(rules)} rules x "
+            f"{len(seeds)} seeds)"
+        )
+
+    out: list[M8CandidateResult] = [
+        res for sublist in flat_results for res in sublist
+    ]
     return out
