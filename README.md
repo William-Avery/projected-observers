@@ -321,6 +321,50 @@ has produced — production-scale, statistically significant on every
 primary metric, frozen-manifest reproducible, zero invariant
 violations, and resilient to the strictest threshold filter.
 
+### M8 — How does hidden 4D state actually support projected candidates?
+
+> **Why**: M7B established that M7 candidates show robustly larger HCE
+> than baselines and that the effect survives the strictest threshold
+> filter. But "HCE is real" is a behavioural claim — it tells us hidden
+> state matters, not *how*. M8 decomposes the mechanism: which spatial
+> region of the hidden fibers (interior, boundary, environment, far)
+> actually carries the causal signal, when does that signal first
+> surface in the 2D projection, what does the propagation look like in
+> 4D XOR-mass over time, and which hidden features lead the visible
+> divergence. Without that decomposition, we can defend "hidden state
+> matters" but not "*here's the mechanism*."
+
+Implements: six per-candidate analyses — (1) **per-column response
+maps** (perturb one (x,y) column at a time, measure local divergence
+at a fixed horizon, build a heatmap over the candidate footprint);
+(2) **emergence timing** (dense short horizons to find the first
+horizon at which local divergence exceeds ε); (3) **pathway tracing**
+(per-step 4D and 2D XOR-mass between original and intervened
+rollouts, plus spread radii from the candidate centroid);
+(4) **mediation analysis** (paired hidden-shuffle interventions on
+interior, boundary, environment, far masks plus visible-flip controls
+on boundary/environment); (5) **feature dynamics** (lead-lag
+correlation between candidate-aggregate hidden features and the
+visible divergence trajectory); (6) **rule-based mechanism
+classifier** assigning one of 7 classes (`boundary_mediated`,
+`interior_reservoir`, `environment_coupled`, `global_chaotic`,
+`threshold_mediated`, `delayed_hidden_channel`, `unclear`) per
+candidate.
+
+The CLI reuses M7B's frozen-manifest machinery (git commit + SHA-256
+of input rule files + autodetected M7 train/validation seed sets +
+disjointness check); writes 7 CSVs (`mechanism_labels.csv`,
+`mediation_summary.csv`, `pathway_traces.csv`, `lifetime_tradeoff.csv`,
+`response_maps.csv`, `feature_dynamics.csv`,
+`mechanism_candidates.csv`); per-candidate response-grid `.npy`
+arrays under `arrays/`; 12 plots; and a `summary.md` that selects
+from 7 canonical interpretation paragraphs covering every
+mechanism-class outcome.
+
+The success criterion: **identify at least one non-artifact mechanism
+by which hidden 4D state locally supports future projected 2D
+candidate dynamics.**
+
 ## Key findings
 
 | Question | Result |
@@ -965,6 +1009,20 @@ outputs/         run artifacts (gitignored)
   paired forward rollouts, captures **per-step divergence trajectories**
   (not just aggregates), produces per-candidate divergence + resilience
   plots, aggregate plots, and an intervention heatmap.
+- **M8** (shipped): **mechanism discovery**. Decomposes the M7B HCE
+  finding into six per-candidate analyses — per-column response maps
+  (which spatial region of the hidden fibers carries the causal
+  signal), emergence timing (when does hidden state first surface in
+  the projection), pathway tracing (per-step 4D and 2D XOR-mass and
+  spread radii), mediation analysis (interior/boundary/environment/far
+  paired hidden-shuffle), feature dynamics (5 hidden features →
+  visible divergence lead-lag), and a rule-based mechanism classifier
+  with 7 classes (boundary_mediated, interior_reservoir,
+  environment_coupled, global_chaotic, threshold_mediated,
+  delayed_hidden_channel, unclear). Reuses M7B's frozen-manifest
+  machinery (git commit + SHA-256 + auto-detected M7 seed-split
+  disjointness check). 12 plots, 7 CSVs, per-candidate response
+  `.npy` arrays, and 7 canonical interpretation paragraphs.
 
 ## Run M7B production-scale validation
 
@@ -1000,6 +1058,53 @@ The summary.md selects from seven canonical interpretation paragraphs
 covering every success/failure mode (strong-success, partial-success,
 distinct-objectives, not-replicated, threshold-artifact,
 local-not-global, 2D-beats-on-observer).
+
+## Run M8 mechanism discovery
+
+```bash
+# Smoke (~1 minute): one M7 rule, two test seeds, T=80, grid 16x16x4x4
+python -m observer_worlds.experiments.run_m8_mechanism_discovery \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --quick --label m8_smoke
+
+# Moderate (~10 minutes): all three sources, 5 seeds, T=200, grid 32x32x4x4
+python -m observer_worlds.experiments.run_m8_mechanism_discovery \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --n-rules-per-source 3 \
+    --test-seeds 6000 6001 6002 6003 6004 \
+    --timesteps 200 --grid 32 32 4 4 \
+    --max-candidates 6 --hce-replicates 2 \
+    --horizons 1 2 5 10 20 40 \
+    --backend numpy --label m8_real
+
+# Production (~hours, per spec): 5 rules per source × 20 test seeds × T=500
+python -m observer_worlds.experiments.run_m8_mechanism_discovery \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --n-rules-per-source 5 \
+    --test-seeds $(seq 6000 6019) \
+    --timesteps 500 --max-candidates 20 --hce-replicates 3 \
+    --horizons 1 2 3 5 10 20 40 80
+```
+
+Default test seeds (6000–6019) are disjoint from M7 train (1000–1004),
+M7 validation (4000–4001), and M7B test (5000–5049). The CLI
+autodetects M7's seed splits from the M7 evolve `config.json` and
+**aborts** if test seeds overlap. The frozen manifest captures git
+commit, dirty flag, command-line invocation, Python and package
+versions, SHA-256 of every input rule file, and all seed sets.
+
+Mechanism-class outputs are interpreted by 7 canonical paragraphs:
+- *"M7's hidden causal dependence is primarily mediated by hidden state under projected candidate boundaries."* (boundary_mediated dominates)
+- *"M7 candidates appear to use hidden fibers as latent internal state reservoirs."* (interior_reservoir dominates)
+- *"Hidden perturbations propagate invisibly before becoming visible, supporting a hidden-channel mechanism."* (delayed_hidden_channel dominates)
+- *"M7's HCE may reflect broad instability rather than candidate-local hidden support."* (global_chaotic dominates — bad outcome)
+- *"M8 confirms M7's HCE is not primarily threshold-mediated."* (threshold_mediated < 15%)
+- *"Hidden causal sensitivity increases observer-like dependence but reduces persistence."* (HCE↔lifetime negative correlation)
+- *"M8 identifies a promising subpopulation of stable hidden-supported projected observers."* (M7 mean lifetime > 30 AND mean HCE > 0.10)
 
 ## Run M7 HCE-guided rule search + held-out validation
 
