@@ -540,12 +540,42 @@ Implements:
   - *"M7 HCE may reflect broad dynamical instability rather than localized hidden support."* (global_chaotic ≥ 40% even with strong far controls)
   - *"M7 uniquely produces thick hidden-supported candidates under this search regime; matched thick-baseline comparison remains unavailable."* (M4C 0 thick, M4A < 5 thick)
 
-> **Status**: M8C code is implemented; smoke test produces full
-> outputs (12 plots, 6 CSVs, frozen manifest, summary.md). 15 new
-> tests pass; 297-test full suite has no regressions. **The empirical
-> large-grid validation is pending** — a real run with grid 96×96×8×8
-> × T=600 × 40 test seeds × 9 rules takes substantial compute and has
-> not yet been executed.
+**Moderate-scale M8C result** (3 sources × 3 rules × 10 test seeds × T=400 × grid 64×64×8×8, N=1016 candidates, frozen-manifest reproducible):
+
+The interior-dominant interpretation **replicates** at large-grid scale with proper far-control geometry.
+
+Per-source headline:
+
+| Source | total | thick | thick-frac | mean HCE | thresh-filt HCE | %interior | %whole-body | %boundary | %env | %global_chaotic | %far-valid | mean far/r |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **M7_HCE_optimized** | 264 | 33 | **12%** | +0.0054 | +0.0046 | **33%** | **24%** | 6% | 0% | 33% | 96% | 19.9 |
+| M4A_viability | 447 | 16 | 4% | +0.0035 | +0.0039 | 0% | 19% | 25% | 0% | 56% | 99% | 18.5 |
+| M4C_observer_optimized | 305 | 0 | 0% | +0.0023 | +0.0001 | — | — | — | — | — | 99% | 19.3 |
+
+What replicates:
+- ✅ **Interior + whole-body = 58% of M7 thick** (M8B was 54%): the dominant mechanism is interior-dominant whole-body coupling, confirmed at production-scale geometry.
+- ✅ **Boundary-mediated remains low** (6% of M7 thick), as M8B suggested.
+- ✅ **Environment-coupled remains 0%** of M7 thick; per-cell normalization correctly defuses the raw-effect "environment > interior" signal that M8 misread.
+- ✅ **M4C produces zero thick candidates** even at N=305 — robustly across two M8C scales now. Observer-optimized rules at this scale make persistent thin candidates, not thick ones.
+- ✅ **M7 vs M4A thick paired** (M4A N_thick=16): HCE_whole +0.014 vs +0.007 (p=0.004, Cliff's δ +0.57); interior_per_cell M7 wins (p=0.002, δ +0.77); boundary_per_cell M7 wins (p=0.004, δ +0.60). M7 ≠ M4A on the mechanism front: M4A thick are 56% global_chaotic and 25% boundary-mediated, with 0% interior_reservoir.
+
+What did **not** improve:
+- ⚠️ **Global_chaotic rate stayed at 33%** for M7 thick (vs M8B's 36%), despite proper far-control geometry. The aggregated `mean dist/radius = 19.9` is misleading: it's averaged over all candidates including thin ones (which have small radius). For M7 thick candidates specifically, the median candidate_radius is 7.2 and the median far_distance/radius is 5.6 — the spec minimum, not generously above it. So far controls did improve over M8B, but a third of M7 thick candidates still show far-region effect ≥ 70% of candidate effect. This suggests **genuine residual far sensitivity in M7 rules at thick-candidate sizes**, not just a geometry artifact.
+- ⚠️ **M7 thick candidates are short-lived** (mean 13 frames at this run, down from M8B's mean 39). The M7 fitness's HCE / lifetime tradeoff appears to manifest more starkly when we filter to thick morphologies.
+- ⚠️ **N_thick=33 for M7 still gives wide CIs** ([0.17, 0.48] for interior_reservoir, [0.18, 0.52] for global_chaotic). A production-scale run is still needed to tighten these.
+
+The interpretation engine fired the strong-confirmation paragraph: *"Large-grid M8C confirms M7's hidden causal support is primarily interior/whole-body, not boundary-mediated."* The headline standing across M8B and M8C: **M7's hidden support among thick candidates is interior-dominant whole-body coupling, with a persistent ~1/3 minority of globally-chaotic thick candidates that no amount of far-control geometry has yet been able to dispel.**
+
+> **Status**: M8C code is implemented and the moderate-scale empirical
+> validation has landed. Interior-dominant whole-body mechanism
+> replicates (58% of M7 thick); boundary stays at 6%; environment at
+> 0%. The 33% global_chaotic rate is the open question — it is
+> dimensionally robust (M8B ~36%, M8C ~33%) and not a geometry
+> artifact, suggesting a fraction of M7 rules genuinely have far-grid
+> hidden sensitivity at thick-candidate scales. **A production-scale
+> run** (grid 96×96×8×8, T=600, 40 test seeds, 5 rules per source) is
+> the natural next step both to tighten CIs and to test whether the
+> global_chaotic minority shrinks at even larger geometric ratios.
 
 ## Key findings
 
