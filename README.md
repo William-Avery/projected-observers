@@ -15,38 +15,167 @@ intervention-sensitive causal structure, self-maintenance under perturbation.
 > walkthrough — every CLI, in narrative order, with time budgets and
 > expected outputs.
 
-## Objectives
+## Why each milestone exists
 
-The framework operationalizes a sequence of increasingly stringent
-empirical questions about higher-dimensional dynamics and projected
-observers:
+Every milestone responds to a specific concern raised by the previous
+one. The narrative arc isn't "more code" — it's "the previous result
+left a loophole; here is the experiment that closes it."
 
-1. **Build the substrate** — a 4D binary cellular automaton, a 4D-to-2D
-   projection, and connected-component tracking on the 2D projected
-   frames so that "observer-candidates" can be defined and persisted
-   over time. *(M1)*
-2. **Operationalize observerhood as five orthogonal functional
-   metrics** — temporal asymmetry, predictive memory, Markov-blanket
-   selfhood, intervention-sensitive causality, perturbation
-   resilience — and combine them into a single track-count-aware
-   `observer_score`. *(M2)*
-3. **Establish controls** — Conway's Life as a 2D baseline, and a
-   hidden-shuffled 4D variant (z,w fibers permuted but the simulation
-   evolves coherently in x,y) as the per-condition negative control.
-   *(M3)*
-4. **Discover non-trivial 4D rules** via a viability search and an
-   observer-fitness-guided rule search. *(M4A, M4C)*
-5. **Test the hypothesis statistically** — paired sweeps over many
-   (rule, seed) pairs with bootstrap CIs, permutation tests, effect
-   sizes, win rates. *(M4B)*
-6. **Hold the test out** — re-run on held-out seeds and against an
-   *equally optimized* 2D rule baseline to remove optimization-effort
-   confounds. *(M4D)*
-7. **Look for an effect 2D cannot have by construction** — Hidden
-   Causal Dependence (M6): perturbations that are invisible in the 2D
-   projection at t=0 but produce measurable downstream divergence.
-   This is the first quantity in the framework that is identically
-   zero in 2D systems by construction.
+### M1 — Build the substrate
+
+> **Why**: nothing else matters without a working pipeline. We need a
+> 4D CA, a projection to 2D, and a way to identify and track
+> "candidate observers" across frames before any of the metric
+> machinery is meaningful.
+
+Implements: 4D Moore-r1 binary CA (numpy + numba kernels), 4D→2D
+mean-threshold projection, connected-component extraction with
+interior/boundary/environment shells, greedy IoU+centroid tracker,
+zarr storage for projected frames + 4D snapshots.
+
+### M2 — Operationalize "observerhood" as measurable quantities
+
+> **Why**: without numbers, the whole project is hand-waving. The
+> spec lists five functional signatures of observerhood (temporal
+> asymmetry, predictive memory, Markov-blanket selfhood,
+> intervention-sensitive causality, perturbation resilience). Each
+> needs a concrete computable estimator on tracked structures.
+
+Implements: `time_score`, `memory_score`, `selfhood_score`,
+`causality_score`, `resilience_score`, combined `observer_score`
+with z-normalization across the candidate population so per-run
+results are comparable.
+
+### M3 — Establish controls
+
+> **Why**: a 4D-only result means nothing without baselines.
+> We need both (a) a fair 2D baseline (Conway's Life) and (b) a
+> negative-control 4D simulation where coherent hidden-dimensional
+> structure has been destroyed. Without these, any "high observer
+> score" in 4D might just reflect "more dynamical complexity" rather
+> than anything dimension-specific.
+
+Implements: `run_2d_baseline.py` (Conway's Life), `run_shuffled_hidden_baseline.py`
+(4D CA with z,w fibers permuted into ca.state every step), and
+`analysis/summarize_results.py` for cross-condition comparison plots.
+
+### M4A — Find rules that produce structure at all
+
+> **Why**: M3 ran end-to-end but produced **0 candidates** in the 4D
+> conditions because the heuristic default rule kills everything
+> immediately. The hypothesis is unanswerable when the 4D side is
+> empty. We need a search over the rule space to find rules that
+> produce *anything* persistent and bounded.
+
+Implements: `FractionalRule` family (5 continuous floats — easier to
+search than discrete birth/survival sets), 7-component **viability
+score** (extinction/saturation/frozen-world penalties; target-
+activity/temporal-change/persistent-component/boundedness/diversity
+rewards), random search with multi-seed evaluation. **Surfaced rules
+that produce 30+ persistent candidates.**
+
+### M4B — Test statistically, not from a single max score
+
+> **Why**: an M3 single-run "max observer_score(4D) > max(2D)" finding
+> would be misleading because more candidates → more shots at a high
+> max. Need **paired** evaluation across many (rule, seed) pairs,
+> with **bootstrap CIs**, **permutation tests**, **Cohen's d /
+> Cliff's δ effect sizes**, and **win rates** on multiple summary
+> metrics — not just max.
+
+Implements: 75-run paired sweep (5 rules × 5 seeds × 3 conditions),
+all 16 SUMMARY_METRICS, three pairwise comparisons (coh vs shuf, coh
+vs 2D, shuf vs 2D), automatic interpretation engine that **flags the
+track-count confound** when extreme-score metrics disagree with
+normalized ones (`score_per_track`, `lifetime_weighted_mean_score`).
+
+### M4C — Maybe the M4A rules just weren't good enough
+
+> **Why**: M4A's viability score is a *cheap proxy*. It rewards
+> "rules that produce candidates" but not "rules that produce
+> *high-observer-score* candidates." If we want the strongest 4D
+> result possible, we should search rule space using the actual
+> observer_score as fitness.
+
+Implements: `(μ+λ)` evolutionary search with Gaussian mutation on
+the 5 fractional-rule floats, full M2 metric suite as fitness,
+default `lifetime_weighted_mean_score` (track-count-resistant).
+Found rules with positive lifetime-weighted observer fitness.
+
+### M4D — Maybe the M4C "win" was just optimization effort
+
+> **Why**: M4B-on-M4C-rules showed coherent 4D significantly beats
+> Conway's Life on `score_per_track` (Cliff's δ = +0.76, 88% win
+> rate). But this comparison is **unfair**: M4C-optimized 4D rules
+> vs unoptimized 2D Life. The "4D advantage" might just be
+> "optimization-effort advantage." We need (a) **held-out
+> evaluation seeds** disjoint from training, and (b) an
+> **equally-optimized 2D baseline** with matched compute budget.
+
+Implements: `evolve_2d_observer_rules.py` (same M4C machinery on
+2D fractional rules), `run_m4d_holdout_validation.py` (two passes:
+vs fixed Life + vs optimized 2D, with held-out seed protocol that
+**aborts** if eval seeds overlap training).
+**Result: optimized 2D wins.** M4C's apparent 4D advantage was
+optimization effort, not dimensionality.
+
+### M5 — Are observer-candidates "agents" by their response to perturbation?
+
+> **Why**: scoring tracks isn't enough. A persistent structure with
+> high observer_score might still be passive matter. The functional
+> definition of "agency" requires that **perturbing the structure**
+> (vs perturbing its environment) has different consequences for
+> the structure's future. We need to actually intervene and
+> measure.
+
+Implements: per-candidate intervention runner with 4 types
+(`internal_flip`, `boundary_flip`, `environment_flip`,
+`hidden_shuffle`); paired forward rollouts capture **per-step
+divergence trajectories**; aggregate plots + per-candidate plots
++ resilience curves.
+
+### M6 — Even if 4D doesn't beat 2D on generic observer_score, look for an effect 2D *cannot have*
+
+> **Why**: M4D falsified the simple "4D > 2D on observer_score"
+> claim under a fair comparison. But that doesn't rule out
+> **dimension-specific** effects that are *by construction*
+> impossible in 2D systems. The cleanest such test: a perturbation
+> that is *invisible* in the 2D projection at t=0 (preserves the
+> projected frame exactly) but changes the underlying 4D state.
+> If the future projection diverges, that divergence is **causally
+> attributable** to hidden-dimensional structure — and 2D systems
+> have no hidden state to perturb, so this quantity is identically
+> zero in 2D by construction.
+
+Implements: `apply_hidden_shuffle_intervention` (z,w permutation,
+preserves count → preserves mean-threshold projection at t=0),
+paired rollouts measuring downstream divergence, the **HCE scalar**
+as the headline metric. Single-rule, N=8 result was suggestive (coh
+HCE +0.064, shuf HCE 0.000, coh wins 7/0).
+
+### M6B — Does M6's effect replicate, and is it candidate-local?
+
+> **Why**: M6 was N=8 candidates, single rule, single run. Three
+> things needed checking: (a) does the effect replicate across
+> many rules + seeds, (b) is it really *candidate-local* (or does
+> any hidden perturbation anywhere have similar effect — in which
+> case it's a global instability, not "self"-specific causal
+> dependence), (c) does the apparent advantage of *coherent* over
+> *shuffled* 4D dynamics survive at scale?
+
+Implements: 4 new interventions (`one_time_scramble_local`,
+`fiber_replacement_local`, `hidden_invisible_far`, `sham`) all
+verified to preserve projection at t=0; **cluster-bootstrap by
+rule** (not row-level — respects within-rule correlation);
+3 candidate selection modes (top observer-score, top lifetime,
+random eligible) so the result doesn't depend on extreme winners.
+
+**Replicates the primary HCE finding** at N=244 (sign-test p < 0.0001,
+86% wins). **Confirms candidate-locality** (local effect 75% larger
+than far-mask control). **Falsifies the M6 secondary claim** that
+coherent specifically > shuffled — both 4D conditions show
+comparable hidden-perturbation responses; M6's apparent gap was a
+snapshot-mechanics artifact.
 
 ## Key findings
 
@@ -62,6 +191,75 @@ rules match or beat 4D — but on a dimension-specific causal probe that
 2D systems cannot exhibit by construction (M6 Hidden Causal Effect),
 coherent 4D shows a positive, directional advantage over its hidden-
 shuffled control.**
+
+## Glossary
+
+### Acronyms
+
+| Term | Meaning |
+|---|---|
+| **HCE** | **Hidden Causal Effect** — downstream projected divergence under a perturbation that leaves the 2D projection byte-identical at t=0. Identically zero in 2D systems by construction; positive in 4D iff hidden state has causal weight on the projected future. The framework's primary dimension-specific quantity. |
+| **CA** | Cellular Automaton |
+| **CI** | Confidence Interval (bootstrap, 95% by default) |
+| **CSV** | Comma-Separated Values (run output format) |
+| **L1** | L1-norm distance, equivalent to mean per-cell absolute difference between two 2D projected frames |
+| **AUC** | Area-Under-Curve of a divergence trajectory over rollout steps |
+| **MSE** | Mean Squared Error (used by Ridge regression in M2 metrics) |
+| **IoU** | Intersection-over-Union (used by the tracker to match components frame-to-frame) |
+
+### Core technical terms
+
+| Term | Meaning |
+|---|---|
+| **4D Moore-r1 neighborhood** | The 80 neighbors of a cell in the 4D grid (3⁴ - 1 = 80) |
+| **Mean-threshold projection** | `Y(x,y) = 1 if mean_{z,w}(X(x,y,z,w)) > 0.5 else 0`. Maps 4D state to 2D frame; depends only on per-(x,y) active count |
+| **Fractional totalistic rule** | A 4D CA rule defined by 5 floats: `birth_min`, `birth_max`, `survive_min`, `survive_max` (all in [0,1] over neighbor *fraction*), and `initial_density`. Cell births if `birth_min ≤ rho ≤ birth_max` where `rho = active_neighbors / 80`; survives if `survive_min ≤ rho ≤ survive_max` |
+| **Track / candidate / observer-candidate** | A connected component in the 2D projected world that persists across multiple frames. *Observer-candidate* = a track passing the persistence filter (age ≥ 10 frames, bounded area, non-trivial internal variation) |
+| **Interior / boundary / environment shells** | For each candidate's 2D mask: interior = mask eroded by 1, boundary = mask XOR interior, environment = dilation of mask minus mask. Used by the M2 selfhood score and the intervention experiments |
+| **Coherent 4D** | The standard 4D CA — natural dynamics with hidden (z,w) state evolving according to the rule |
+| **Per-step-shuffled 4D** | Negative control: same rule, but z,w fibers are randomly permuted into `ca.state` at every step. Per-(x,y) counts preserved, hidden geometry destroyed |
+
+### M2 metric vocabulary
+
+| Term | Meaning |
+|---|---|
+| **time_score** | Backward predictive error − forward predictive error (Ridge + KFold). High score = future is more predictable from current state than past is. Tests **temporal asymmetry** |
+| **memory_score** | `error(predict S_{t+k} \| S_t) − error(predict S_{t+k} \| S_t, I_t)`. High = candidate's internal state adds predictive power for the future. Tests **predictive memory** |
+| **selfhood_score** | `R²(B → I) − max(0, R²((B,E) → I) − R²(B → I))` — high = boundary mediates environment-internal interaction (Markov-blanket style). Tests **boundary mediation** |
+| **causality_score** | Aggregate paired-rollout divergence under 4 intervention types (`internal_flip`, `boundary_flip`, `environment_flip`, `hidden_shuffle`). High = candidate-targeted perturbations matter more than environment perturbations |
+| **resilience_score** | Survival + area_recovery + centroid_continuity + shape_similarity after a candidate-interior perturbation. High = candidate recovers from damage |
+| **observer_score** | Z-normalized weighted sum of the five components above, computed across the run's candidate population |
+| **score_per_track** | `sum(observer_scores) / max(num_tracks, 1)` — track-count-resistant aggregate. Used as the primary cross-condition comparison metric |
+| **lifetime_weighted_mean_score** | `sum(observer_score × age) / sum(age)` — long-lived candidates dominate. Default fitness for M4C |
+| **top5_mean_score / p95_score** | Top-5-mean and 95th-percentile of observer_scores in a run. *Confounded* by candidate count (more candidates → more shots at extremes) |
+
+### Intervention types (M5 + M6 + M6B)
+
+| Term | Effect on 2D projection at t=0 | Effect on 4D state |
+|---|---|---|
+| **sham** | unchanged | unchanged (identity) |
+| **internal_flip** *(M5)* | usually changes | random bit-flips in the candidate's interior 4D fibers |
+| **boundary_flip** *(M5)* | usually changes | random bit-flips in the candidate's boundary 4D fibers |
+| **environment_flip** *(M5)* | usually changes | random bit-flips in the candidate's environment shell 4D fibers |
+| **hidden_shuffle** / **hidden_invisible_local** *(M2/M5/M6/M6B)* | **byte-identical** | z,w cells permuted within each (x,y) column under the candidate's interior |
+| **one_time_scramble_local** *(M6B)* | **byte-identical** | z,w fibers replaced with fresh uniform-random arrangement at matched count |
+| **fiber_replacement_local** *(M6B)* | **byte-identical** | z,w fibers swapped with bucket-matched fibers from elsewhere on the grid |
+| **hidden_invisible_far** *(M6B)* | **byte-identical** | hidden_invisible applied to a translated mask at the antipodal grid location (localization control) |
+| **visible_match_count** *(M6/M6B)* | small but non-zero | random bit-flips in interior 4D fibers, count matched to whatever hidden_invisible flipped (visible control) |
+
+### Statistical vocabulary
+
+| Term | Meaning |
+|---|---|
+| **Cluster-bootstrap by rule** | Bootstrap resampling done at the *rule* level (not row level) so within-rule correlation doesn't artificially tighten CIs |
+| **Cliff's δ** | Effect size = P(A > B) − P(A < B). Range [-1, +1]; +1 means A always beats B |
+| **Cohen's d (paired)** | Effect size = mean(diffs) / std(diffs). Standard small/medium/large = 0.2/0.5/0.8 |
+| **Permutation p-value** | Two-sided p computed by randomly flipping condition labels per pair and counting permutations as extreme as observed |
+| **Sign-test p-value** | Two-sided binomial test on the count of paired differences > 0 vs ≤ 0 |
+| **Win rate** | Fraction of paired comparisons where condition A wins |
+| **Track-count confound** | Bigger N → more shots at high max scores. Why we report `score_per_track` and `lifetime_weighted_mean_score` as primary metrics rather than max/top5 |
+| **Held-out seeds** | Evaluation seeds disjoint from those used during rule optimization (M4D enforces this; aborts on overlap) |
+| **Optimized 2D baseline** | A 2D fractional rule found by running the same M4C-style observer-fitness search on the 2D rule family. Used by M4D to remove the "optimization-effort confound" from coh-vs-2D comparisons |
 
 ## The hypothesis
 

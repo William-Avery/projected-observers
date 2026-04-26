@@ -5,10 +5,34 @@ run them to reproduce (and extend) the headline findings. Read top to
 bottom on a first pass; later you can jump straight to the milestone
 you care about.
 
+**Each section starts with the question the experiment is designed to
+answer.** The milestones are not "more code piled on" — each one
+exists because the previous one left a specific loophole, and this
+section makes the loophole explicit before showing how to run the test.
+
 > **Time budgets** below assume a modern macOS / Linux laptop with
 > numba available. Numba JIT-compiles the 4D CA kernel on first use
 > (~5–10 s), then runs at full speed. All times exclude that first
 > compile.
+
+## Quick glossary
+
+(See `README.md` for the full glossary table.)
+
+| Term | Quick meaning |
+|---|---|
+| **HCE** | Hidden Causal Effect — downstream projected divergence under a perturbation invisible at t=0. Zero in 2D by construction |
+| **observer_score** | Z-normalized combined metric: time + memory + selfhood + causality + resilience |
+| **score_per_track** | `sum(observer_scores) / num_tracks`. Track-count-resistant cross-condition comparison metric |
+| **lifetime_weighted_mean_score** | Default M4C fitness — weights observer_scores by candidate age. Track-count-resistant |
+| **fractional rule** | 4D CA rule defined by 5 floats: `birth_min`, `birth_max`, `survive_min`, `survive_max` (all over neighbor *fraction* in [0,1]), `initial_density` |
+| **coherent_4d** | Standard 4D CA — natural hidden-dimensional dynamics |
+| **per-step-shuffled-4d** | Negative-control simulation: z,w fibers randomized at every step |
+| **candidate / observer-candidate** | Connected component in 2D projection that persists across multiple frames + passes the persistence filter |
+| **hidden_invisible** | Perturbation that permutes z,w cells in a candidate's interior — preserves projection at t=0 (unique to 4D) |
+| **track-count confound** | More candidates → more shots at extreme max scores. Why `score_per_track` is preferred over max/top5 |
+| **cluster-bootstrap by rule** | Bootstrap that resamples whole rules (not rows) so CIs respect within-rule correlation |
+| **held-out seeds** | Seeds disjoint from those used during optimization. M4D enforces this |
 
 ---
 
@@ -30,9 +54,11 @@ If `numba` install gives you trouble, you can fall back to
 
 ## 1. Smallest end-to-end run (1 minute)
 
-The simplest 4D-to-2D experiment. The default heuristic rule produces
-trivial dynamics (die-off), which is **expected** — this run validates
-that the pipeline is wired correctly.
+> **Why run this?** Before any hypothesis test, confirm the pipeline
+> is wired correctly: 4D CA → projection → tracking → metric scoring →
+> CSVs/plots/GIF/summary. The default rule produces trivial dynamics
+> on purpose, so a "0 candidates" outcome here is a successful
+> integration test, not a research result.
 
 ```bash
 python -m observer_worlds.experiments.run_4d_projection \
@@ -59,6 +85,13 @@ discovers rules that actually produce persistent structures.
 ---
 
 ## 2. Find non-trivial 4D rules (M4A — viability search) — 1 minute
+
+> **Why run this?** The default 4D rule produces zero candidates. The
+> hypothesis is unanswerable when the 4D side is empty, so we need a
+> systematic search of the rule space for rules that produce
+> *anything* persistent and bounded. Without this step, every
+> downstream comparison is "0 vs Conway's Life" which tells us
+> nothing.
 
 Random search over **fractional totalistic 4D rules** (5 continuous
 floats: `birth_min`, `birth_max`, `survive_min`, `survive_max`,
@@ -92,6 +125,14 @@ this rule.
 
 ## 3. The simplest hypothesis test (M3 baselines) — 5 minutes
 
+> **Why run this?** A high observer_score in 4D alone tells us
+> nothing. We need to know whether 4D-projected candidates score
+> higher than (a) a fair 2D system (Conway's Life) and (b) a
+> "shuffle-the-hidden-dimensions" 4D control. The 2D baseline rules
+> out "any complex dynamics produces high scores"; the shuffled-4D
+> control rules out "having 4D state at all is enough — coherent
+> hidden organization doesn't matter."
+
 Runs the same rule under three matched conditions, then a cross-run
 analysis.
 
@@ -118,6 +159,14 @@ condition**, so this is suggestive only — for a real test, see step 5.
 ---
 
 ## 4. Search for rules that maximize observer-likeness (M4C) — 1–10 min
+
+> **Why run this?** M4A's viability score rewards rules that produce
+> *any* persistent candidates. But viability and observer-likeness
+> are different things — a rule could produce many persistent blobs
+> that all score badly on time/memory/selfhood. To give the 4D side
+> the strongest possible chance against the 2D baseline, search rule
+> space using the actual `observer_score` as fitness. If 4D *can*
+> outperform 2D, this is where it should show up.
 
 Random or evolutionary `(μ+λ)` search using the **full M2 metric
 suite** as fitness. Default fitness is `lifetime_weighted_mean_score`
@@ -150,6 +199,15 @@ plus `history.json` and `plots/fitness_vs_generation.png` for evolve.
 
 ## 5. The actual statistical hypothesis test (M4B) — ~5 minutes
 
+> **Why run this?** A single-run "max observer_score" comparison is
+> easy to fool: shuffled-4D often produces 2-3× more candidates per
+> run than coherent-4D, so it has more shots at extreme high scores.
+> We need **paired** evaluation across many rules and seeds, with
+> rigorous statistical tools that don't conflate "more shots" with
+> "higher quality." This is the test that, if positive, would let
+> us claim a real effect — and if negative, would let us rule out a
+> false-positive from M3-style single-condition comparisons.
+
 Paired (rule × seed) sweep across all three conditions with bootstrap
 CIs, permutation tests, Cohen's d / Cliff's δ effect sizes, and win
 rates. **This is the main reportable test.**
@@ -181,6 +239,16 @@ runs typically produce 2–3× more candidates → more shots at high max.
 ---
 
 ## 6. Held-out validation with optimized 2D baseline (M4D) — ~15 minutes
+
+> **Why run this?** If M4B-on-M4C-rules shows "coherent 4D beats 2D
+> Life on score_per_track," there are still two confounds: (a) the
+> M4C-optimized 4D rules might overfit to the training seeds, and
+> (b) the comparison is fundamentally unfair — optimized 4D rules
+> vs unoptimized 2D Life. The "advantage" might just be optimization
+> effort. Two fixes: re-run on **held-out seeds** (disjoint from
+> training), and re-run vs an **equally-optimized 2D rule** with
+> matched compute budget. If 4D still wins, the result is real. If
+> not, the apparent advantage was optimization, not dimensionality.
 
 Two passes:
 - **Pass A**: against fixed Conway's Life (the standard cheap 2D baseline)
@@ -228,6 +296,16 @@ You'll also find per-pass full M4B-style summaries under
 
 ## 7. Per-candidate intervention experiment (M5) — ~30 seconds
 
+> **Why run this?** A persistent track that scores high on
+> `observer_score` might still be passive matter. The functional
+> definition of "agency" requires that perturbing the structure
+> produces *different* consequences than perturbing its environment.
+> M5 actually intervenes on each candidate and measures
+> per-step divergence trajectories under four intervention types. The
+> distinctive signature of agency is asymmetry — internal/boundary
+> perturbations should affect the candidate's future *differently*
+> than equivalent-magnitude environment perturbations.
+
 For top observer-candidates, applies four intervention types
 (`internal_flip`, `boundary_flip`, `environment_flip`,
 `hidden_shuffle`) at a snapshot inside the candidate's lifetime, runs
@@ -255,12 +333,24 @@ writes:
 
 ---
 
-## 8. Hidden Causal Effect (M6) — the headline experiment — ~30 seconds
+## 8. Hidden Causal Effect (M6) — ~30 seconds
 
-The framework's positive finding. Tests for an effect that is
-**identically zero in 2D systems by construction**: downstream
-projected divergence under a perturbation that preserves the 2D
-projection at t=0.
+> **Why run this?** M4D falsified the simple "4D > 2D on generic
+> observer_score" claim under a fair comparison. But that doesn't
+> rule out **dimension-specific** effects — properties that 4D
+> systems *can* have and 2D systems *cannot have by construction*.
+> The cleanest test: a perturbation that is *invisible* in the 2D
+> projection at t=0 (mean-threshold projection unchanged because
+> the per-column count is preserved) but changes the underlying 4D
+> state. Any downstream projected divergence must be causally
+> attributable to **hidden state** — and 2D systems have no hidden
+> state to perturb, so this quantity is identically zero in 2D.
+> If positive in 4D, it's the framework's first dimension-specific
+> finding.
+
+Tests for an effect that is **identically zero in 2D systems by
+construction**: downstream projected divergence under a perturbation
+that preserves the 2D projection at t=0.
 
 ```bash
 python -m observer_worlds.experiments.run_m6_hidden_causal \
@@ -282,6 +372,69 @@ replicates × 15 rollout steps): coherent mean HCE = 0.064 (88%
 positive), shuffled mean HCE = 0.000, paired diff +0.064 with 95%
 bootstrap CI [+0.036, +0.092] excluding zero. Coherent wins 7/0 (1
 tie at 0).
+
+---
+
+## 9. M6 replication at scale + stronger controls (M6B) — ~7 minutes
+
+> **Why run this?** M6 was N=8 candidates from a *single* rule. Three
+> things needed checking before reporting M6 as a real finding:
+>
+> 1. **Replication** — does the effect survive across many rules
+>    from both M4A (viability) and M4C (observer-optimized) sources,
+>    many seeds, many candidates per run?
+> 2. **Localization** — is the effect candidate-*local*, or does
+>    perturbing the hidden state *anywhere* on the grid produce
+>    similar downstream divergence? If the latter, the effect is a
+>    global instability of the dynamics, not a "self"-specific
+>    causal dependence.
+> 3. **The shuffled-control claim** — M6 reported coh-HCE = 0.064
+>    while shuf-HCE = 0.000. Is this gap real, or an artifact of
+>    snapshot mechanics in a single-run setup?
+>
+> M6B answers all three with proper cluster-bootstrap-by-rule
+> statistics, three additional control interventions
+> (`one_time_scramble_local`, `fiber_replacement_local`, `hidden_invisible_far`,
+> `sham`), and three candidate selection modes (top observer-score,
+> top lifetime, random eligible) so the result doesn't depend on
+> hand-picked extreme winners.
+
+```bash
+# ~7 minutes: 3 M4C + 3 M4A rules × 3 seeds × ~5 candidates per mode ×
+# 3 selection modes × 6 interventions × 3 replicates × 3 horizons
+python -m observer_worlds.experiments.run_m6b_hidden_causal_replication \
+    --rules-from outputs/m4c_evolve/leaderboard.json \
+    --also-rules-from outputs/m4a_search/leaderboard.json \
+    --n-rules 3 --seeds 3 --timesteps 150 \
+    --grid 32 32 4 4 --max-candidates 5 --replicates 3 \
+    --horizons 5 10 20 --backend numpy \
+    --base-seed 2000 --label m6b
+```
+
+Outputs `summary.md` with cluster-bootstrap CIs for every
+(condition, intervention, horizon) cell, paired comparisons across
+five intervention pairs, win rates, horizon trends, and an automatic
+interpretation that selects from seven canonical paragraphs based on
+which controls survive significance.
+
+The framework's primary M6B finding from a real run of this exact
+config:
+
+| Comparison | mean diff | 95% CI | wins | sign-test p |
+|---|---|---|---|---|
+| coh local hidden vs sham | **+0.039** | [+0.013, +0.070] | 210/244 (86%) | **<0.0001** |
+| coh local hidden vs far hidden (local div) | **+0.239** | [+0.152, +0.335] | 183/244 (75%) | **<0.0001** |
+
+→ HCE is **robust and candidate-local**. Pearson r between HCE and
+observer_score is +0.22 (weak) — the framework's interpretation
+engine flags HCE as "a distinct dimension-specific property not
+captured by the current observer_score."
+
+The M6 *secondary* claim (coh > shuffled) **does NOT replicate** at
+scale: only 1/6 rules show coh > shuf. The single-rule M6 result was
+a snapshot-mechanics artifact at short horizons. **What's special
+about 4D is having the hidden state at all** — not specifically
+what kind of hidden organization it has.
 
 ---
 
