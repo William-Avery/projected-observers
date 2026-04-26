@@ -238,7 +238,43 @@ def compute_response_map(
 ) -> ResponseMap:
     """For each (x,y) in the interior, perturb only that column's
     z,w fiber with a hidden_invisible shuffle, run forward, and record
-    the full-grid local divergence at the chosen horizon."""
+    the full-grid local divergence at the chosen horizon.
+
+    ``backend`` accepts:
+      * ``"numba"`` / ``"numpy"`` / ``"cuda"`` — serial per-column rollouts
+        on the corresponding CA4D backend.
+      * ``"cuda-batched"`` — all per-column probes evolved together in a
+        single CA4DBatch kernel launch (one chunk per ``max_chunk``
+        elements). Aggregate metrics are byte-identical to the serial
+        path because (a) the CUDA single-step is bit-identical to numba
+        and (b) the per-(coord, rep) RNG draw order is preserved.
+    """
+    if backend == "cuda-batched":
+        return _compute_response_map_cuda_batched(
+            snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
+            candidate_id=candidate_id, horizon=horizon,
+            n_replicates=n_replicates, rng_seed=rng_seed,
+        )
+    return _compute_response_map_serial(
+        snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
+        candidate_id=candidate_id, horizon=horizon,
+        n_replicates=n_replicates, rng_seed=rng_seed,
+        backend=backend,
+    )
+
+
+def _compute_response_map_serial(
+    *,
+    snapshot_4d: np.ndarray,
+    rule: BSRule,
+    interior_mask: np.ndarray,
+    candidate_id: int,
+    horizon: int,
+    n_replicates: int,
+    rng_seed: int,
+    backend: str,
+) -> ResponseMap:
+    """Serial per-column response map (canonical CPU reference)."""
     Nx, Ny = snapshot_4d.shape[0], snapshot_4d.shape[1]
     response = np.zeros((Nx, Ny), dtype=np.float64)
 
@@ -271,7 +307,129 @@ def compute_response_map(
             responses_at_h.append(local)
         response[x, y] = float(np.mean(responses_at_h)) if responses_at_h else 0.0
 
-    # Aggregate metrics.
+    return _aggregate_response_map(
+        response=response, interior_mask=interior_mask,
+        boundary=boundary, env=env,
+        candidate_id=candidate_id, horizon=horizon,
+        grid_shape=(Nx, Ny),
+    )
+
+
+def _compute_response_map_cuda_batched(
+    *,
+    snapshot_4d: np.ndarray,
+    rule: BSRule,
+    interior_mask: np.ndarray,
+    candidate_id: int,
+    horizon: int,
+    n_replicates: int,
+    rng_seed: int,
+    max_chunk: int = 128,
+) -> ResponseMap:
+    """Batched per-column response map.
+
+    Builds a ``(B, *snapshot_4d.shape)`` host array — one batch element
+    per ``(coord, rep)`` pair, in the same order as the serial path —
+    then evolves them all via :func:`evolve_chunked` in a single kernel
+    launch (chunked at ``max_chunk`` to fit VRAM). The final 4D states
+    are projected to 2D and the local L1 metric is computed against the
+    one-shot unperturbed reference rollout.
+
+    Byte-identity invariant: because (a) the CUDA single-step is
+    bit-identical to numba and (b) we draw one child RNG per
+    ``(coord, rep)`` in the same order as the serial path, the resulting
+    ``response_grid`` should match the serial reference exactly.
+    """
+    from observer_worlds.worlds.ca4d_batch import evolve_chunked
+
+    Nx, Ny = snapshot_4d.shape[0], snapshot_4d.shape[1]
+    response = np.zeros((Nx, Ny), dtype=np.float64)
+
+    if not interior_mask.any():
+        return ResponseMap(
+            candidate_id=candidate_id, horizon=horizon, grid_shape=(Nx, Ny),
+            interior_mask=interior_mask, response_grid=response,
+        )
+
+    # Unperturbed reference rollout — single CPU pass, reused as the
+    # comparison baseline for every probe. Backend "numba" is the
+    # canonical CPU reference; the CUDA single-step is bit-identical so
+    # this is also what the GPU would produce.
+    frames_orig = _rollout_proj(snapshot_4d, rule, horizon, backend="numba")
+    parent_rng = np.random.default_rng(rng_seed)
+
+    boundary, env = _shell_masks(interior_mask)
+    probe_mask = interior_mask | boundary
+
+    coords = np.argwhere(probe_mask)
+    n_coords = len(coords)
+    B = n_coords * n_replicates
+
+    if B == 0:
+        return _aggregate_response_map(
+            response=response, interior_mask=interior_mask,
+            boundary=boundary, env=env,
+            candidate_id=candidate_id, horizon=horizon,
+            grid_shape=(Nx, Ny),
+        )
+
+    # Build (B, *shape) host array of perturbed initial states. Order:
+    # coord-major, replicate-minor — same as the serial loop.
+    states = np.empty((B, *snapshot_4d.shape), dtype=np.uint8)
+    b = 0
+    for x, y in coords:
+        col_mask = np.zeros_like(interior_mask)
+        col_mask[x, y] = True
+        for _rep in range(n_replicates):
+            r = np.random.default_rng(int(parent_rng.integers(0, 2**63 - 1)))
+            states[b] = apply_hidden_shuffle_intervention(snapshot_4d, col_mask, r)
+            b += 1
+
+    # Single batched kernel launch (chunked at max_chunk for VRAM).
+    final_states = evolve_chunked(
+        shape=snapshot_4d.shape,
+        rules=[rule] * B,
+        initial_states_host=states,
+        n_steps=horizon,
+        max_chunk=max_chunk,
+    )
+
+    # Project each final 4D state and compute the local L1 metric, then
+    # average across replicates per coord.
+    ref_proj = frames_orig[-1]
+    b = 0
+    for x, y in coords:
+        responses_at_h: list[float] = []
+        for _rep in range(n_replicates):
+            f_int_proj = _project(final_states[b])
+            responses_at_h.append(
+                _l1_local(ref_proj, f_int_proj, interior_mask)
+            )
+            b += 1
+        response[x, y] = (
+            float(np.mean(responses_at_h)) if responses_at_h else 0.0
+        )
+
+    return _aggregate_response_map(
+        response=response, interior_mask=interior_mask,
+        boundary=boundary, env=env,
+        candidate_id=candidate_id, horizon=horizon,
+        grid_shape=(Nx, Ny),
+    )
+
+
+def _aggregate_response_map(
+    *,
+    response: np.ndarray,
+    interior_mask: np.ndarray,
+    boundary: np.ndarray,
+    env: np.ndarray,
+    candidate_id: int,
+    horizon: int,
+    grid_shape: tuple[int, int],
+) -> ResponseMap:
+    """Compute aggregate metrics from a filled response grid and return a
+    :class:`ResponseMap`. Shared by serial and cuda-batched paths."""
     total = response.sum()
     interior_resp = response[interior_mask].sum()
     bnd_resp = response[boundary].sum()
@@ -310,7 +468,7 @@ def compute_response_map(
         cent_dist = 0.0
 
     return ResponseMap(
-        candidate_id=candidate_id, horizon=horizon, grid_shape=(Nx, Ny),
+        candidate_id=candidate_id, horizon=horizon, grid_shape=grid_shape,
         interior_mask=interior_mask, response_grid=response,
         interior_response_fraction=interior_frac,
         boundary_response_fraction=bnd_frac,
