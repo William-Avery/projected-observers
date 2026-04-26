@@ -1,0 +1,202 @@
+[
+  {
+    "rank": 1,
+    "fitness": 0.15538613862297518,
+    "fitness_mode": "lifetime_weighted",
+    "n_seeds": 2,
+    "rule": {
+      "birth_min": 0.27017043647014494,
+      "birth_max": 0.3712446779182278,
+      "survive_min": 0.41168256392943015,
+      "survive_max": 0.6470646886899796,
+      "initial_density": 0.3410901867786117
+    },
+    "mean_n_tracks": 523.0,
+    "mean_n_candidates": 60.0,
+    "mean_max_score": 1.0243376140330238,
+    "mean_top5_mean_score": 0.7906530897575801,
+    "mean_p95_score": 0.6914502526075259,
+    "mean_lifetime_weighted_mean_score": 0.15538613862297518,
+    "mean_score_per_track": 0.001294520111993125,
+    "mean_late_active": 0.293118491768837,
+    "mean_max_component_lifetime": 105.5,
+    "per_seed_fitness": [
+      0.13180898569845992,
+      0.1789632915474904
+    ],
+    "per_seed_n_candidates": [
+      59,
+      61
+    ],
+    "per_seed_n_tracks": [
+      513,
+      533
+    ],
+    "aborted_seeds": 0,
+    "sim_time_seconds": 4.755481243133545,
+    "seeds_used": [
+      1000,
+      1001
+    ]
+  },
+  {
+    "rank": 2,
+    "fitness": 0.09686701459255358,
+    "fitness_mode": "lifetime_weighted",
+    "n_seeds": 2,
+    "rule": {
+      "birth_min": 0.07594135846976029,
+      "birth_max": 0.306336221844677,
+      "survive_min": 0.38119222252980606,
+      "survive_max": 0.681192222529806,
+      "initial_density": 0.46418486519802254
+    },
+    "mean_n_tracks": 384.5,
+    "mean_n_candidates": 80.5,
+    "mean_max_score": 1.3509000958096382,
+    "mean_top5_mean_score": 0.9641836096139524,
+    "mean_p95_score": 0.7016544861514891,
+    "mean_lifetime_weighted_mean_score": 0.09686701459255358,
+    "mean_score_per_track": 0.0020621475858005126,
+    "mean_late_active": 0.422024741768837,
+    "mean_max_component_lifetime": 142.0,
+    "per_seed_fitness": [
+      0.036563108399861516,
+      0.15717092078524564
+    ],
+    "per_seed_n_candidates": [
+      84,
+      77
+    ],
+    "per_seed_n_tracks": [
+      390,
+      379
+    ],
+    "aborted_seeds": 0,
+    "sim_time_seconds": 6.90007209777832,
+    "seeds_used": [
+      1000,
+      1001
+    ]
+  },
+  {
+    "rank": 3,
+    "fitness": 0.0887965204410317,
+    "fitness_mode": "lifetime_weighted",
+    "n_seeds": 2,
+    "rule": {
+      "birth_min": 0.15039969866590328,
+      "birth_max": 0.35578870253618833,
+      "survive_min": 0.3205884799994374,
+      "survive_max": 0.5413725331981518,
+      "initial_density": 0.33332998227809163
+    },
+    "mean_n_tracks": 236.5,
+    "mean_n_candidates": 32.0,
+    "mean_max_score": 1.8856198125614592,
+    "mean_top5_mean_score": 1.0429556938690374,
+    "mean_p95_score": 1.0266653971377395,
+    "mean_lifetime_weighted_mean_score": 0.0887965204410317,
+    "mean_score_per_track": 0.005919162480668123,
+    "mean_late_active": 0.3622135519981384,
+    "mean_max_component_lifetime": 147.0,
+    "per_seed_fitness": [
+      0.04617750882311821,
+      0.13141553205894518
+    ],
+    "per_seed_n_candidates": [
+      32,
+      32
+    ],
+    "per_seed_n_tracks": [
+      263,
+      210
+    ],
+    "aborted_seeds": 0,
+    "sim_time_seconds": 4.644068241119385,
+    "seeds_used": [
+      1000,
+      1001
+    ]
+  },
+  {
+    "rank": 4,
+    "fitness": 0.0874026280082234,
+    "fitness_mode": "lifetime_weighted",
+    "n_seeds": 2,
+    "rule": {
+      "birth_min": 0.0940418209202738,
+      "birth_max": 0.1679466737723027,
+      "survive_min": 0.2733130303588661,
+      "survive_max": 0.5296117648903813,
+      "initial_density": 0.3473942498038994
+    },
+    "mean_n_tracks": 409.5,
+    "mean_n_candidates": 11.0,
+    "mean_max_score": 1.019310415206101,
+    "mean_top5_mean_score": 0.5771235279876111,
+    "mean_p95_score": 0.811794307431162,
+    "mean_lifetime_weighted_mean_score": 0.0874026280082234,
+    "mean_score_per_track": 0.0009916773876852544,
+    "mean_late_active": 0.23297525942325592,
+    "mean_max_component_lifetime": 147.0,
+    "per_seed_fitness": [
+      0.10966587504864438,
+      0.06513938096780242
+    ],
+    "per_seed_n_candidates": [
+      8,
+      14
+    ],
+    "per_seed_n_tracks": [
+      403,
+      416
+    ],
+    "aborted_seeds": 0,
+    "sim_time_seconds": 2.4446001052856445,
+    "seeds_used": [
+      1000,
+      1001
+    ]
+  },
+  {
+    "rank": 5,
+    "fitness": 0.07785034049319503,
+    "fitness_mode": "lifetime_weighted",
+    "n_seeds": 2,
+    "rule": {
+      "birth_min": 0.2559555281085481,
+      "birth_max": 0.38318291393336457,
+      "survive_min": 0.41686710927714093,
+      "survive_max": 0.6130504605346239,
+      "initial_density": 0.28135294096978125
+    },
+    "mean_n_tracks": 597.5,
+    "mean_n_candidates": 132.5,
+    "mean_max_score": 1.5424836985602768,
+    "mean_top5_mean_score": 1.0749602379162515,
+    "mean_p95_score": 0.6404996079864943,
+    "mean_lifetime_weighted_mean_score": 0.07785034049319503,
+    "mean_score_per_track": 0.00279282294032336,
+    "mean_late_active": 0.2946028709411621,
+    "mean_max_component_lifetime": 74.5,
+    "per_seed_fitness": [
+      0.0838972873444174,
+      0.07180339364197268
+    ],
+    "per_seed_n_candidates": [
+      139,
+      126
+    ],
+    "per_seed_n_tracks": [
+      606,
+      589
+    ],
+    "aborted_seeds": 0,
+    "sim_time_seconds": 6.966043710708618,
+    "seeds_used": [
+      1000,
+      1001
+    ]
+  }
+]

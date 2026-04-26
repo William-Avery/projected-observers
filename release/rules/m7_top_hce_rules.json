@@ -1,0 +1,97 @@
+[
+  {
+    "birth_min": 0.25370786315055893,
+    "birth_max": 0.4250742621629639,
+    "survive_min": 0.07111239534858768,
+    "survive_max": 0.3271315885854963,
+    "initial_density": 0.28524505999386496,
+    "_metadata": {
+      "rank": 1,
+      "m7_fitness": 12.928285714285712,
+      "n_seeds": 2,
+      "mean_observer_score": 0.8707527343870651,
+      "mean_hidden_vs_sham_delta": 0.192529296875,
+      "mean_hidden_vs_far_delta": 0.4641815476190477,
+      "mean_candidate_lifetime": 28.6,
+      "mean_near_threshold_fraction": 0.04,
+      "n_candidates_total": 10,
+      "phase": "evolution"
+    }
+  },
+  {
+    "birth_min": 0.0789651028994757,
+    "birth_max": 0.25228901223480316,
+    "survive_min": 0.3757904185283255,
+    "survive_max": 0.6373146865194902,
+    "initial_density": 0.407275194457406,
+    "_metadata": {
+      "rank": 2,
+      "m7_fitness": 12.449733974358974,
+      "n_seeds": 2,
+      "mean_observer_score": 0.904511614403037,
+      "mean_hidden_vs_sham_delta": 0.2326171875,
+      "mean_hidden_vs_far_delta": 0.39583333333333337,
+      "mean_candidate_lifetime": 42.8,
+      "mean_near_threshold_fraction": 0.16499999999999998,
+      "n_candidates_total": 10,
+      "phase": "evolution"
+    }
+  },
+  {
+    "birth_min": 0.27017043647014494,
+    "birth_max": 0.3712446779182278,
+    "survive_min": 0.41168256392943015,
+    "survive_max": 0.6470646886899796,
+    "initial_density": 0.3410901867786117,
+    "_metadata": {
+      "rank": 3,
+      "m7_fitness": 11.945727200182398,
+      "n_seeds": 2,
+      "mean_observer_score": 0.6214311571849744,
+      "mean_hidden_vs_sham_delta": 0.2137451171875,
+      "mean_hidden_vs_far_delta": 0.37854166666666667,
+      "mean_candidate_lifetime": 31.6,
+      "mean_near_threshold_fraction": 0.2893627450980392,
+      "n_candidates_total": 10,
+      "phase": "evolution"
+    }
+  },
+  {
+    "birth_min": 0.20395593196756254,
+    "birth_max": 0.45395593196756256,
+    "survive_min": 0.4319754290127709,
+    "survive_max": 0.5584166857556867,
+    "initial_density": 0.16365107543324503,
+    "_metadata": {
+      "rank": 4,
+      "m7_fitness": 11.886521894455353,
+      "n_seeds": 2,
+      "mean_observer_score": 0.9493550547113845,
+      "mean_hidden_vs_sham_delta": 0.29677734375,
+      "mean_hidden_vs_far_delta": 0.303628663003663,
+      "mean_candidate_lifetime": 26.6,
+      "mean_near_threshold_fraction": 0.2476923076923077,
+      "n_candidates_total": 10,
+      "phase": "evolution"
+    }
+  },
+  {
+    "birth_min": 0.05,
+    "birth_max": 0.25462272249238915,
+    "survive_min": 0.2686658264275743,
+    "survive_max": 0.4774477541057401,
+    "initial_density": 0.28458486850785353,
+    "_metadata": {
+      "rank": 5,
+      "m7_fitness": 11.799393510749548,
+      "n_seeds": 2,
+      "mean_observer_score": 1.0513948432324485,
+      "mean_hidden_vs_sham_delta": 0.1605712890625,
+      "mean_hidden_vs_far_delta": 0.3197321428571428,
+      "mean_candidate_lifetime": 22.8,
+      "mean_near_threshold_fraction": 0.06555555555555555,
+      "n_candidates_total": 10,
+      "phase": "evolution"
+    }
+  }
+]
