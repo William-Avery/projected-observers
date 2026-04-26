@@ -507,6 +507,65 @@ This is the strongest defensible positive finding in the framework.
 
 ---
 
+## 12. M7B — production-scale validation (~10–60 min depending on scale)
+
+> **Why run this?** M7's promising holdout used only 3 test seeds.
+> Before treating the M7 result as established, we want to see it
+> replicate at substantially larger scale, with frozen code/configs
+> (so the result is bit-reproducible from a git commit + input rule
+> file hashes), hard invariant enforcement (any candidate whose
+> hidden-invisible perturbation accidentally produced a non-zero
+> initial-projection-delta is flagged INVALID and excluded — this
+> is the contract that makes HCE meaningful in the first place), and
+> multi-level cluster bootstrap (resampling by rule, by seed, and by
+> rule+seed jointly) so the CIs respect both kinds of correlation.
+>
+> M7B can either **confirm** the M7 result at scale, **show it
+> doesn't replicate**, or surface one of four canonical failure modes
+> (threshold artifact, global chaos, observer collapse, train→test
+> overfit). Each outcome is useful; what's not useful is asserting
+> M7 without testing it at scale.
+
+```bash
+# Smoke (~1 minute): all four sources at minimal scale
+python -m observer_worlds.experiments.run_m7b_production_holdout \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --optimized-2d-rules outputs/m4d_2d_evolve/top_2d_rules.json \
+    --quick --label m7b_smoke
+
+# Production-scale per spec (~hours): 10 rules per source × 50 test seeds × T=500
+python -m observer_worlds.experiments.run_m7b_production_holdout \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --optimized-2d-rules outputs/m4d_2d_evolve/top_2d_rules.json \
+    --n-rules-per-source 10 \
+    --test-seeds $(seq 5000 5049) \
+    --timesteps 500 --max-candidates 40 --hce-replicates 5 \
+    --horizons 5 10 20 40 80
+```
+
+The CLI **autodetects** the M7 evolve run's train/validation seeds
+(walks up from `--m7-rules` looking for `config.json`) and **aborts
+at startup** if any test seed overlaps train or validation. The
+frozen manifest at `frozen_manifest.json` records the git commit +
+dirty flag, command line, Python and package versions, SHA-256 hash
+of every input rule file, and all seed sets — so a reader can
+exactly reproduce the run.
+
+The summary.md selects from 7 canonical paragraphs:
+- *"M7 production validation supports the core claim..."* (strong success)
+- *"M7 optimized hidden dependence but partially traded off generic observer-likeness."* (partial success)
+- *"HCE and observer_score remain distinct objectives."*
+- *"The M7 result did not replicate at production scale."* (failure: HCE collapse)
+- *"M7 exploited projection-threshold sensitivity."* (failure: threshold artifact)
+- *"The effect is candidate-local, not merely global hidden chaos."* (when local-vs-far positive)
+- *"This does not invalidate the HCE result; it confirms that HCE is the dimension-specific contribution..."* (when 2D beats on observer)
+
+---
+
 ## 10. M6C hidden-organization taxonomy (~2 minutes)
 
 > **Why run this?** M6B confirmed HCE is real and replicable, but the
