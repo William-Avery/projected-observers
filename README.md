@@ -103,7 +103,10 @@ measurable, directional advantage over hidden-shuffled-4D.**
 | M4B (M4C-optimized rules) | coh 4D vs **fixed** 2D Life, normalized | **significant** (p = 0.003 on score_per_track) |
 | M4D Pass A (held-out seeds) | coh 4D vs **fixed** 2D Life, normalized | **replicates**: significant (p = 0.0005, 96% win) |
 | **M4D Pass B (held-out seeds)** | **coh 4D vs optimized 2D, normalized** | **optimized 2D wins** (p = 0.030 on score_per_track) |
-| **M6 (Hidden Causal Dependence)** | **coh-4D HCE vs shuffled-4D HCE** | **coh wins**: mean diff +0.064, 95% CI [+0.036, +0.092], coh 7/0 wins |
+| **M6 (Hidden Causal Dependence)** | coh-4D HCE vs shuffled-4D HCE *(N=8, single rule)* | suggestive: coh +0.064, 95% CI [+0.036, +0.092], coh 7/0 |
+| **M6B (HCE replication, N=244 across 6 rules from both M4A + M4C)** | **coh local hidden vs sham, on raw future divergence** | **robust**: +0.039, 95% CI [+0.013, +0.070], **210/244 wins, sign p < 0.0001** |
+| M6B | **coh local hidden vs far hidden, on candidate-local divergence** | **localized**: +0.239, 95% CI [+0.152, +0.335], 183/244 wins, sign p < 0.0001 |
+| M6B | coh-4D HCE vs per-step-shuffled-4D HCE *(does the M6 effect depend on coherent dynamics?)* | **does NOT replicate**: only 1/6 rules show coh > shuf, diff −0.006. M6's single-rule "shuffled HCE ≈ 0" was a snapshot-mechanics artifact. |
 
 **Headline finding (generic observer_score)**: when the 2D baseline is
 also observer-fitness-optimized (matched compute budget, same fitness,
@@ -112,18 +115,45 @@ reverses. The previous positive result against fixed Conway's Life was
 an artifact of comparing optimized 4D rules against an unoptimized 2D
 rule.
 
-**Headline finding (M6 — hidden causal dependence)**: every M6
-candidate is subjected to a `hidden_invisible` perturbation that
-permutes z,w cells in the candidate's interior. By construction,
-mean-threshold projection at t=0 is byte-identical (count preserved).
-Any downstream projected divergence is therefore **causally attributable
-to hidden-dimensional structure** — a quantity 2D systems can't have.
-Coherent-4D candidates have **mean HCE = 0.064** (88% positive,
-HCE/visible-control ratio = 0.99). Hidden-shuffled-4D candidates have
-**mean HCE = 0.000** (the framework correctly detects "no hidden
-structure to disrupt"). Coherent beats shuffled with a 95% bootstrap CI
-excluding zero. **This is the first signature unique to coherent 4D
-dynamics that the framework has surfaced.**
+**Headline finding (M6+M6B — hidden causal dependence)**:
+
+Every candidate gets a `hidden_invisible` perturbation: z,w cells in the
+candidate's interior are permuted, leaving the mean-threshold 2D projection
+**byte-identical at t=0**. Any downstream projected divergence is therefore
+causally attributable to hidden-dimensional structure — a quantity 2D
+systems cannot have by construction.
+
+M6 (single rule, N=8 candidates) found a directional positive effect with
+the 4D-coherent vs hidden-shuffled comparison statistically suggestive.
+**M6B replicated the experiment at scale** (N=244 paired measurements
+across 6 rules from both M4A *viability* and M4C *observer-fitness*
+sources, 3 seeds each, 5 candidates per selection mode × 3 modes,
+multiple horizons, with proper cluster-bootstrap by rule):
+
+* **HCE survives replication**: coh local hidden vs sham mean diff
+  **+0.039 [+0.013, +0.070], 86% win rate, sign-test p < 0.0001**.
+* **Effect is candidate-local**: coh local hidden vs FAR hidden on
+  candidate-region divergence: **+0.239, 75% win rate, p < 0.0001**.
+* **HCE / observer_score correlation = +0.22** — *positive but weak*.
+  The interpretation engine selects the canonical sentence "Hidden-causal
+  dependence is a distinct dimension-specific property not captured by
+  the current observer_score."
+* **The M6 *secondary* claim (coh > shuffled on HCE) does NOT replicate**.
+  Coherent vs per-step-shuffled on `hidden_invisible_local`: only 1/6
+  rules show coh > shuf. M6's apparent "shuffled HCE ≈ 0" was a
+  snapshot-mechanics artifact (the per-step shuffle drives columns to
+  uniform-random, so further shuffling at the snapshot is near no-op
+  *at short horizons*; at h ≥ 10 with proper rollout, both conditions
+  produce comparable hidden-perturbation responses).
+
+**Net result**: hidden causal dependence is **robust and candidate-local**
+across rules and seeds; the effect is real and reproducible. But it
+**does not specifically require coherent 4D dynamics** — both coherent
+and per-step-shuffled 4D dynamics show comparable hidden-causal responses.
+The framework's primary novelty stands: a quantity that is *zero by
+construction in 2D* and *positive by direct measurement in 4D*. The
+question of which kinds of hidden organization are responsible remains
+open — a natural M6C / M7 follow-up.
 
 **What is established**:
 - Both M4A viability rules and M4C-optimized rules produce projected
@@ -168,7 +198,7 @@ new rule families, new fitness modes, or new candidate definitions.
 
 ## Status
 
-**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 are complete.** The framework now implements:
+**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 + M6B are complete.** The framework now implements:
 
 - 4D Moore-r1 CA (numpy reference + numba kernel) with periodic boundaries
 - 4D → 2D mean-threshold projection
@@ -539,6 +569,16 @@ outputs/         run artifacts (gitignored)
   baseline and reports the paired (rank-paired or id-paired)
   difference. First framework component that produces a positive,
   uniquely-4D directional finding.
+- **M6B** (shipped): **HCE replication at scale + stronger controls**.
+  Adds three new interventions (`one_time_scramble_local`,
+  `fiber_replacement_local`, `hidden_invisible_far`) plus a sham
+  baseline. Runs across multiple rules + multiple seeds + multiple
+  candidates × 3 selection modes (top observer-score, top lifetime,
+  random eligible) × multiple horizons × multiple replicates. Reports
+  raw future divergence, sham-subtracted, far-control-subtracted,
+  hidden-vs-visible ratio — never letting the HCE-as-ratio dominate
+  interpretation. Cluster-bootstrap by rule. Replicates the M6 primary
+  finding and falsifies the M6 secondary claim.
 - **M5** (shipped): **per-candidate intervention experiments** — for top
   observer-candidates, applies all 4 intervention types
   (`internal_flip`, `boundary_flip`, `environment_flip`,
@@ -546,6 +586,26 @@ outputs/         run artifacts (gitignored)
   paired forward rollouts, captures **per-step divergence trajectories**
   (not just aggregates), produces per-candidate divergence + resilience
   plots, aggregate plots, and an intervention heatmap.
+
+## Run M6B replication (recommended over M6)
+
+```bash
+# ~7 minutes: 3 M4C + 3 M4A rules × 3 seeds × ~5 candidates each ×
+# 3 selection modes × 6 interventions × 3 replicates × 3 horizons
+python -m observer_worlds.experiments.run_m6b_hidden_causal_replication \
+    --rules-from outputs/observer_search/m4c_evolve/leaderboard.json \
+    --also-rules-from outputs/rule_search/m4a_search/leaderboard.json \
+    --n-rules 3 --seeds 3 --timesteps 150 \
+    --grid 32 32 4 4 --max-candidates 5 --replicates 3 \
+    --horizons 5 10 20 --backend numpy \
+    --base-seed 2000 --label m6b
+```
+
+Outputs `summary.md` with cluster-bootstrap CIs and an interpretation
+that selects from a small set of canonical paragraphs based on which
+controls survive significance. Per the M6B spec, *raw* future
+divergence + sham-subtracted + far-control-subtracted are the primary
+reportable quantities; the HCE-as-ratio is exposed but not headlined.
 
 ## Run M6 Hidden Causal Dependence experiment
 

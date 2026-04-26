@@ -53,6 +53,19 @@ from observer_worlds.analysis.m6_plots import (
     plot_hce_vs_visible_scatter,
     write_all_m6_plots,
 )
+from observer_worlds.analysis.m6b_plots import (
+    INTERVENTION_PALETTE,
+    write_all_m6b_plots,
+)
+from observer_worlds.analysis.m6b_stats import (
+    aggregate_by_condition_intervention_horizon,
+    compare_paired,
+    grouped_bootstrap_mean_ci,
+    m6b_full_summary,
+    render_m6b_summary_md,
+    sign_test_p,
+    standard_paired_comparisons,
+)
 
 __all__ = [
     "plot_lifetimes",
