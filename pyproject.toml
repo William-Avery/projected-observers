@@ -26,6 +26,11 @@ dependencies = [
 dev = ["pytest>=7.4", "pytest-benchmark>=4.0"]
 gpu = ["cupy-cuda12x>=13.0", "nvidia-cuda-nvrtc-cu12>=12.0"]
 
+[tool.pytest.ini_options]
+markers = [
+    "perf_long: long-form performance gate (skip without --perf-long)",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["observer_worlds*"]

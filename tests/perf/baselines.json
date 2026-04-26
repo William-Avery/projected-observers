@@ -1,0 +1,16 @@
+{
+    "machine": "14900k + 3080 Ti, Windows 11, Python 3.12, cupy 14.0.1",
+    "captured_at": "2026-04-26",
+    "notes": "Smoke baseline measured during refactor. Production-scale baselines (M7B reference, rule-search throughput) need re-capture once a long-form measurement run is performed; placeholders below are intentionally conservative.",
+
+    "m8_quick_cuda_batched_seconds": 15.0,
+    "m8_quick_cuda_batched_observed": 8.5,
+    "_m8_quick_note": "M8 --quick (3 rules per source x 2 seeds x T=80 x 32x32x4x4) on cuda-batched + n_workers=30. Empirically ~8.5s; gate at 15.0s absorbs numba JIT cold-start variance and joblib spawn overhead in fresh subprocess. A regression past 15s indicates a real perf issue.",
+
+    "m7b_reference_seconds_target": 1800,
+    "_m7b_reference_note": "Spec target: 5 rules per source x 50 test seeds x T=500 under 30 min. Not yet captured at this scale on cuda-batched. Long-form gate (--perf-long) holds the slot.",
+
+    "rule_search_sims_per_sec_baseline_numba": null,
+    "rule_search_sims_per_sec_target_cuda": null,
+    "_rule_search_note": "Spec target: cuda-batched fitness throughput >= 20x numba baseline. The CA4DBatch primitive is in place but evaluate_rule_m7 was not migrated in Stage 3 (deferred). Gate cannot fire until that migration lands."
+}
