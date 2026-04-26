@@ -817,15 +817,38 @@ no-op regression test.
 ## Performance notes
 
 - The 4D CA Moore-r1 update has 80 neighbours per cell. The numba
-  kernel handles a 64×64×8×8 grid at ~10–30 steps/s on a laptop CPU.
+  CPU kernel handles a 64×64×8×8 grid at ~10–30 steps/s on a laptop
+  CPU.
+- On Windows + RTX 3080 Ti, the `--backend cuda` flag (cupy RawKernel)
+  runs ~10–30× faster than numba per single-grid step. M8 mechanism
+  discovery additionally accepts `--backend cuda-batched`, which
+  evolves all per-column response-map probes in one batched kernel
+  launch via `CA4DBatch` (typical 32×32 candidate: ~600 grids batched
+  together).
+- Sweep drivers (M4B, M6B, M6C/M7B, M8) parallelize over
+  (rule × seed × condition) cells via joblib loky. Pass
+  `--n-workers N` to override the default of `cpu_count - 2`.
+  Workers pin `NUMBA_NUM_THREADS=1` automatically to avoid
+  oversubscription on the 14900k.
+- Empirical wall times on the 14900k + 3080 Ti, default flags:
+  - M4B `--quick` sweep (12 cells): **44s serial → 12s with
+    `--n-workers 8`**.
+  - M8 `--quick --backend cuda-batched` (6 cells, 3 sources): **~8.5s
+    end-to-end**.
 - M2 metric scoring (Ridge + KFold across time/memory/selfhood per
-  candidate) is the slowest stage downstream — expect ~0.1–1 s per
-  candidate.
-- M4B / M4D sweeps are embarrassingly parallel across (rule, seed)
-  pairs but currently run sequentially. The default sweep config in
-  this tutorial is sized for a few minutes of wall time. The
-  production defaults (10 rules × 10 seeds × T=500 on 64×64×8×8)
-  take 1–3 hours.
+  candidate) is unchanged by the cuda backend — expect ~0.1–1 s per
+  candidate. Remains the dominant stage on small CA grids.
+- Production sweeps (M4D / M7B at 10 rules × 50 seeds × T=500 ×
+  64×64×8×8) historically took 1–3 hours on serial numba CPU; with
+  `--n-workers 22 --backend cuda-batched` on the 14900k + 3080 Ti
+  the projected wall time is well under an hour. (Production-scale
+  perf gates exist as `--perf-long` skipped placeholders in
+  `tests/perf/`; baseline once you've measured a real run.)
+- Reproducibility: `--backend numba` remains the canonical CPU path
+  for published runs. `--backend cuda` and `--backend cuda-batched`
+  produce statistically equivalent (and on the same hardware,
+  byte-identical) results — verified by parity tests in
+  `tests/cuda/`.
 
 ---
 
