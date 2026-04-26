@@ -177,6 +177,38 @@ coherent specifically > shuffled — both 4D conditions show
 comparable hidden-perturbation responses; M6's apparent gap was a
 snapshot-mechanics artifact.
 
+### M6C — What hidden organization produces HCE? Is it just a threshold artifact?
+
+> **Why**: M6B confirmed HCE is real, replicable, and candidate-local.
+> But the mechanism is unclear, and one critical alternative
+> explanation needs ruling out: **mean-threshold projection might
+> create artifacts**. If most candidate columns have active_fraction
+> ≈ 0.5 (right at the projection threshold), then any hidden bit-flip
+> easily flips the projection downstream — and "HCE" would just be
+> "projection mechanics applied to threshold-marginal columns."
+> If we filter to candidates whose columns sit far from threshold
+> and HCE survives, the finding is much stronger.
+
+Implements: 24 hidden-state features per candidate (per-column +
+candidate-aggregate + temporal); a **threshold-artifact audit** that
+re-runs the HCE analysis on candidate subsets filtered by
+`near_threshold_fraction`; **grouped-CV regression** (`Ridge` and
+`RandomForest`) with `GroupKFold` by rule_id so models can't memorize
+rule identity; and an ablation battery (`random_hidden_shuffle`,
+`count_preserving_shuffle`, `spatial_destroying_scramble`,
+`fiber_replacement`, `temporal_history_swap`, `sham`).
+
+**Result**: HCE is **partially threshold-mediated** — strict filter
+to candidates with no near-threshold columns drops mean future_div
+by ~60% — but **not entirely**. 80% of far-from-threshold candidates
+still show positive HCE (mean 0.016 vs 0.040 unfiltered). The
+strongest RF feature importance is `hidden_temporal_persistence`
+(0.24), with threshold features second-tier (0.05–0.08). The
+interpretation engine fires *"HCE persists away from projection
+thresholds, supporting a stronger hidden-causal-substrate
+interpretation"* and *"Hidden causal dependence is associated with
+temporally coherent hidden structure"*.
+
 ## Key findings
 
 | Question | Result |
@@ -305,6 +337,7 @@ measurable, directional advantage over hidden-shuffled-4D.**
 | **M6B (HCE replication, N=244 across 6 rules from both M4A + M4C)** | **coh local hidden vs sham, on raw future divergence** | **robust**: +0.039, 95% CI [+0.013, +0.070], **210/244 wins, sign p < 0.0001** |
 | M6B | **coh local hidden vs far hidden, on candidate-local divergence** | **localized**: +0.239, 95% CI [+0.152, +0.335], 183/244 wins, sign p < 0.0001 |
 | M6B | coh-4D HCE vs per-step-shuffled-4D HCE *(does the M6 effect depend on coherent dynamics?)* | **does NOT replicate**: only 1/6 rules show coh > shuf, diff −0.006. M6's single-rule "shuffled HCE ≈ 0" was a snapshot-mechanics artifact. |
+| **M6C (Hidden Organization Taxonomy)** | **Is HCE primarily a projection-threshold artifact?** Run candidate-level threshold audit with feature regressions | **Partially threshold-mediated, but not entirely**: HCE drops ~40-60% under strict near-threshold filters but **80% of far-from-threshold candidates still show positive HCE**. RF importances rank `hidden_temporal_persistence` (0.24) > threshold features (0.05-0.08). HCE *is* a real hidden-causal property; threshold sensitivity is one channel through which it manifests, not the whole story. |
 
 **Headline finding (generic observer_score)**: when the 2D baseline is
 also observer-fitness-optimized (matched compute budget, same fitness,
@@ -396,7 +429,7 @@ new rule families, new fitness modes, or new candidate definitions.
 
 ## Status
 
-**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 + M6B are complete.** The framework now implements:
+**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 + M6B + M6C are complete.** The framework now implements:
 
 - 4D Moore-r1 CA (numpy reference + numba kernel) with periodic boundaries
 - 4D → 2D mean-threshold projection
@@ -777,6 +810,18 @@ outputs/         run artifacts (gitignored)
   hidden-vs-visible ratio — never letting the HCE-as-ratio dominate
   interpretation. Cluster-bootstrap by rule. Replicates the M6 primary
   finding and falsifies the M6 secondary claim.
+- **M6C** (shipped): **hidden-organization taxonomy**. Now that we
+  know HCE is real and replicates, what hidden-state properties
+  produce it? The framework extracts 24 hidden features per candidate
+  (per-column: active fraction, distance to threshold, entropy,
+  spatial autocorrelation, connected components in z,w; cross-column:
+  heterogeneity, fiber-fiber correlation; temporal: hidden
+  persistence and volatility), runs a **threshold-artifact audit**
+  on filtered candidate subsets, fits Ridge + RandomForest with
+  **GroupKFold by rule_id** for cross-validated feature importances,
+  and runs an ablation battery (random shuffle / count-preserving /
+  spatial-destroying / fiber-replacement / temporal-history-swap /
+  sham). Surfaces which hidden properties drive HCE.
 - **M5** (shipped): **per-candidate intervention experiments** — for top
   observer-candidates, applies all 4 intervention types
   (`internal_flip`, `boundary_flip`, `environment_flip`,
@@ -784,6 +829,26 @@ outputs/         run artifacts (gitignored)
   paired forward rollouts, captures **per-step divergence trajectories**
   (not just aggregates), produces per-candidate divergence + resilience
   plots, aggregate plots, and an intervention heatmap.
+
+## Run M6C hidden-organization taxonomy (recommended after M6B)
+
+```bash
+# ~2 minutes: 3 M4C + 3 M4A rules × 2 seeds × 10 candidates × 3 replicates × 3 horizons.
+# Computes 24 hidden features per candidate, runs threshold audit,
+# grouped-CV regression, and ablation battery.
+python -m observer_worlds.experiments.run_m6c_hidden_organization_taxonomy \
+    --rules-from outputs/observer_search/m4c_evolve/leaderboard.json \
+    --also-rules-from outputs/rule_search/m4a_search/leaderboard.json \
+    --n-rules 3 --seeds 2 --timesteps 150 \
+    --grid 32 32 4 4 --max-candidates 10 --replicates 3 \
+    --horizons 5 10 20 --backend numpy \
+    --base-seed 3000 --label m6c
+```
+
+Outputs `summary.md` with the threshold audit, top-correlated features,
+GroupKFold-CV regression scores, RF feature importances, and one of
+six canonical interpretation paragraphs (or a combination) selected
+based on which features survive significance.
 
 ## Run M6B replication (recommended over M6)
 

@@ -438,6 +438,69 @@ what kind of hidden organization it has.
 
 ---
 
+## 10. M6C hidden-organization taxonomy (~2 minutes)
+
+> **Why run this?** M6B confirmed HCE is real and replicable, but the
+> mechanism is unclear. One critical alternative explanation is that
+> mean-threshold projection creates artifacts: if a candidate's
+> columns sit near the projection threshold (active_fraction ≈ 0.5),
+> any hidden bit-flip easily flips the projection downstream, and
+> "HCE" would reduce to "projection mechanics on threshold-marginal
+> columns." We need to either show HCE depends mostly on threshold
+> margin (in which case it's a projection-specific finding) or that
+> HCE persists in candidates whose columns are *far* from threshold
+> (in which case it's a stronger hidden-causal-substrate finding).
+> M6C extracts 24 hidden features per candidate, runs a threshold
+> audit, fits grouped-CV regression to identify which features
+> predict HCE, and runs an ablation battery to separate which kind
+> of hidden organization matters.
+
+```bash
+# ~2 minutes: 3 M4C + 3 M4A rules × 2 seeds × 10 candidates × 3 replicates × 3 horizons
+python -m observer_worlds.experiments.run_m6c_hidden_organization_taxonomy \
+    --rules-from outputs/m4c_evolve/leaderboard.json \
+    --also-rules-from outputs/m4a_search/leaderboard.json \
+    --n-rules 3 --seeds 2 --timesteps 150 \
+    --grid 32 32 4 4 --max-candidates 10 --replicates 3 \
+    --horizons 5 10 20 --backend numpy \
+    --base-seed 3000 --label m6c
+```
+
+Outputs:
+- `hidden_features.csv` — 24 features × candidate
+- `hce_joined_features.csv` — features ⨯ HCE outcomes (the analysis-ready table)
+- `correlation_table.csv`, `feature_importances.csv`, `threshold_audit.csv`,
+  `ablation_results.csv`, `model_scores.json`
+- 12 plots: scatter HCE vs each top feature, threshold-audit boxplot,
+  predicted-vs-actual HCE, ablation effects, feature correlation heatmap
+- `summary.md` with the canonical interpretation paragraphs
+
+**Real-run result (this exact config, 107 candidates):**
+
+Threshold audit:
+| Subset | n | mean future_div | fraction > 0 |
+|---|---|---|---|
+| all | 107 | +0.040 | 90% |
+| **near-threshold-fraction < 0.10** | 45 | **+0.016** | **80%** |
+| mean-threshold-margin > 0.10 | 91 | +0.035 | 88% |
+
+Top RF feature importances for HCE:
+1. `hidden_temporal_persistence` (0.24)
+2. `mean_hidden_spatial_autocorrelation` (0.11)
+3. `mean_threshold_margin` (0.08)
+4. `mean_hidden_variance` (0.08)
+5. `near_threshold_fraction` (0.05)
+
+Interpretation that fired:
+> *HCE persists away from projection thresholds, supporting a stronger
+> hidden-causal-substrate interpretation. Hidden causal dependence is
+> associated with temporally coherent hidden structure. HCE is
+> associated with hidden microstate complexity. Current feature set
+> does not fully explain HCE; hidden dependence may be rule-specific
+> or require richer descriptors.*
+
+---
+
 ## What "summary.md" looks like across the experiments
 
 Every CLI writes a self-contained `summary.md` to its run dir. Open
