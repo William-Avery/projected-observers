@@ -42,6 +42,7 @@ def parallel_sweep(
     *,
     n_workers: int | None = None,
     progress: Callable[[str], None] | None = None,
+    verbose: int = 0,
 ) -> list:
     """Map ``fn`` over ``items`` in parallel processes, preserving order.
 
@@ -58,9 +59,12 @@ def parallel_sweep(
         ``n_workers == 1`` runs serially in-process (no joblib overhead).
     progress:
         Optional completion callback. Called once with a human-readable
-        string when the sweep finishes. Per-item progress is not emitted;
-        callers needing live updates for long sweeps should use joblib's
-        ``verbose`` setting directly or wrap ``fn`` to log on each call.
+        string when the sweep finishes. For per-item live updates during
+        long sweeps, set ``verbose`` instead.
+    verbose:
+        Forwarded to ``joblib.Parallel(verbose=...)``. Values >= 5 emit
+        per-task completion lines to stderr (e.g. "Done 12 out of 60").
+        Default 0 (silent). Ignored on the serial path.
     """
     n = _default_n_workers() if n_workers is None else int(n_workers)
     if n == 1 or len(items) <= 1:
@@ -77,7 +81,7 @@ def parallel_sweep(
 
     from joblib import Parallel, delayed
 
-    results = Parallel(n_jobs=n, backend="loky", verbose=0)(
+    results = Parallel(n_jobs=n, backend="loky", verbose=verbose)(
         delayed(fn)(item) for item in items
     )
 

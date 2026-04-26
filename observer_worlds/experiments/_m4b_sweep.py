@@ -602,9 +602,10 @@ def run_sweep(
 ) -> list[PairedRecord]:
     """Run the full (rules x seeds x conditions) sweep.
 
-    When ``n_workers != 1``, work is parallelized over (rule_idx, seed,
-    condition) triples via ``parallel_sweep``. Default n_workers is
-    cpu_count - 2.
+    Work is parallelized over (rule_idx, seed, condition) triples via
+    ``parallel_sweep``. Default ``n_workers`` is ``cpu_count - 2``; on
+    machines with <= 2 cores this resolves to 1 and the serial path is
+    used. Pass ``n_workers=1`` explicitly to force serial.
     """
     from observer_worlds.parallel import parallel_sweep
 
@@ -635,12 +636,17 @@ def run_sweep(
         "snapshot_at": snapshot_at,
     }
 
+    # Forward live per-task lines to stderr when a progress callback is
+    # provided -- otherwise long sweeps go silent for hours.
+    verbose = 10 if progress is not None else 0
+
     t0 = time.time()
     flat_results = parallel_sweep(
         items,
         _ParallelTask(shared),
         n_workers=n_workers,
         progress=progress,
+        verbose=verbose,
     )
     elapsed = time.time() - t0
     if progress is not None:
