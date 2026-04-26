@@ -38,13 +38,28 @@ section makes the loophole explicit before showing how to run the test.
 
 ## 0. Setup
 
+### Windows (canonical from 2026-04 onward)
+
 ```bash
 git clone https://github.com/William-Avery/projected-observers.git
-cd projected-observers/observer_worlds
+cd projected-observers
+py -3.12 -m venv .venv
+source .venv/Scripts/activate
+pip install -e ".[dev,gpu]"
+pytest tests/ -v   # should print all green
+```
+
+The `gpu` extra installs `cupy-cuda12x` for the CUDA backend (RTX 30/40-series, driver ≥525).
+Skip it if you don't have an NVIDIA GPU; CPU-only runs still work via the `numba` backend.
+Python 3.12 is required because `numba 0.65` does not yet support 3.14.
+
+### macOS / Linux (legacy, CPU only)
+
+```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/ -v   # should print "153 passed"
+pytest tests/ -v
 ```
 
 If `numba` install gives you trouble, you can fall back to
