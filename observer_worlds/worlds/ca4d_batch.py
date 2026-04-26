@@ -210,3 +210,54 @@ class CA4DBatch:
     def states_host(self) -> np.ndarray:
         """Host copy of all batch elements (B, Nx, Ny, Nz, Nw)."""
         return cp.asnumpy(self._state)
+
+
+def evolve_chunked(
+    *,
+    shape: tuple[int, int, int, int],
+    rules: Sequence[BSRule],
+    initial_states_host: np.ndarray,
+    n_steps: int,
+    max_chunk: int | None = None,
+) -> np.ndarray:
+    """Evolve K independent grids for ``n_steps`` and return host states.
+
+    Splits the work into chunks of size ``max_chunk`` so very large K
+    fits in VRAM. On ``cupy.cuda.OutOfMemoryError`` the chunk size is
+    halved and the failing chunk retried. Returns ``(K, *shape)`` host
+    array of final states.
+
+    This is the recommended caller for M8 response-map probes and
+    rule-search fitness eval when K may be large.
+    """
+    if not HAS_CUPY:
+        raise RuntimeError("cupy required")
+    K = int(initial_states_host.shape[0])
+    if K != len(rules):
+        raise ValueError(f"rules length {len(rules)} != K {K}")
+
+    chunk = K if max_chunk is None else int(max_chunk)
+    out = np.empty((K, *shape), dtype=np.uint8)
+    i = 0
+    while i < K:
+        end = min(K, i + chunk)
+        try:
+            sub = CA4DBatch.from_states(
+                states_host=initial_states_host[i:end],
+                rules=list(rules[i:end]),
+            )
+            for _ in range(n_steps):
+                sub.step()
+            out[i:end] = sub.states_host()
+            del sub
+            cp.get_default_memory_pool().free_all_blocks()
+            i = end
+        except cp.cuda.memory.OutOfMemoryError:
+            cp.get_default_memory_pool().free_all_blocks()
+            if chunk <= 1:
+                raise RuntimeError(
+                    "batch does not fit even at chunk=1; "
+                    "shrink grid or n_steps"
+                )
+            chunk = max(1, chunk // 2)
+    return out
