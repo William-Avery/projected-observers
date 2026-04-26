@@ -365,14 +365,33 @@ The success criterion: **identify at least one non-artifact mechanism
 by which hidden 4D state locally supports future projected 2D
 candidate dynamics.**
 
-> **Status**: M8 code is implemented and the smoke test produces full
-> outputs (12 plots, 7 CSVs, per-candidate response arrays,
-> frozen_manifest.json, summary.md) without errors. The 29 M8 tests
-> pass and the 252-test full suite has no regressions. **The
-> moderate-scale and production-scale empirical conclusions are
-> pending validation** — no mechanism result is claimed from M8 yet.
-> The M7 / M7B HCE finding stands; what M7B's HCE means
-> mechanistically is what M8 is meant to answer once the run lands.
+> **Status**: M8 code is implemented; the 29 M8 tests pass and the
+> 252-test full suite has no regressions. **Production-scale empirical
+> conclusions are still pending.** A moderate-scale run has landed and
+> is summarized below — it replicates the M7B HCE advantage and rules
+> out threshold-mediated and global-chaotic explanations, but cannot
+> cleanly disentangle boundary-mediated from interior-reservoir
+> mechanisms at the candidate sizes this run produced.
+
+**Moderate-scale M8 result** (3 sources × 3 rules × 5 test seeds × T=200 × grid 32×32×4×4, N=264 candidates, frozen-manifest reproducible):
+
+| Source | n | mean obs | mean life | mean HCE | locality_idx | boundary-mediated | global_chaotic | threshold-mediated |
+|---|---|---|---|---|---|---|---|---|
+| **M7_HCE_optimized** | 84 | **+0.94** | 44 | **+0.082** | **+0.090** | **88%** | 10% | 1% |
+| M4C_observer_optimized | 90 | +0.64 | 92 | +0.040 | +0.044 | 73% | 24% | 1% |
+| M4A_viability | 90 | +0.60 | 75 | +0.048 | +0.051 | 70% | 22% | 0% |
+
+Paired M7 vs M4C: HCE +0.042 (p=0.001, Cliff's δ +0.59), candidate_locality_index +0.047 (p=0.001, Cliff's δ +0.52), candidate_lifetime −48 (p=0.001). Paired M7 vs M4A: HCE +0.034 (p=0.001, Cliff's δ +0.34), locality +0.039 (p=0.001).
+
+What this rules out and what it shows:
+- ✅ **HCE is not threshold-mediated** in M7. M7's HCE↔near_threshold_fraction correlation is +0.13, vs M4C's +0.49 and M4A's +0.64. M7 evolution successfully decoupled HCE from threshold sensitivity.
+- ✅ **HCE is not predominantly global chaos** in M7. Only 10% of M7 candidates classify as `global_chaotic` (vs M4C 24%, M4A 22%), and M7's `candidate_locality_index` is ~2× the baselines' (p=0.001).
+- ✅ **M7 broke the HCE↔lifetime tradeoff** that holds in baselines. M4C and M4A show HCE↔lifetime correlations of −0.55 and −0.58 respectively (high-HCE candidates die faster), but M7 shows +0.07 — essentially decoupled.
+- ✅ **HCE is candidate-localized** in M7: HCE↔boundary_response_fraction = +0.65 (vs M4C +0.27, M4A +0.43).
+- ⚠️ **Boundary vs interior mediation cannot be distinguished at this candidate size**. Most M7 candidates are <10 cells (median lifetime 39 frames, median area small). For thin candidates `_shell_masks` falls back to using the entire interior_mask as the boundary, which structurally pegs `boundary_mediation_index ≈ 0.50` across all sources and mechanism classes. The 88% `boundary_mediated` label reflects "response is on the candidate (interior or boundary), not on environment or far cells" — not a clean boundary-vs-interior decomposition.
+- ⚠️ **Environment-coupling cannot be ruled out**. The mediation analysis finds `environment_hidden_effect = +0.168` for M7, ~2× larger than `interior_hidden_effect = +0.083`. The current response-map only probes (interior ∪ boundary), so this wouldn't trigger the `environment_coupled` classifier — this is a real limitation flagged for the production run.
+
+The moderate-scale run is therefore **positive on HCE replication, candidate-locality, and absence-of-artifact**, but **inconclusive on which spatial sub-region of the candidate carries the mechanism**. A production-scale run (larger grid, longer T, longer-lived candidates so erosion produces a non-empty interior) is needed to cleanly classify the mechanism. The M8 code milestone stands; the specific mechanism class label is pending production validation.
 
 ## Key findings
 
