@@ -454,14 +454,49 @@ with 7 canonical interpretation paragraphs:
 - *"HCE persists in thick morphologies."*
 - *"Insufficient thick candidates to disambiguate."* (when no thick candidates land)
 
-> **Status**: M8B code is implemented and the smoke test produces full
-> outputs (12 plots, 5 CSVs, frozen_manifest, summary.md). 30 new
-> tests pass; 282-test full suite has no regressions. **Empirical
-> disambiguation is pending** — the smoke at quick scale produced 0
-> thick candidates (rules and grids designed for HCE produce mostly
-> small structures). A real M8B requires either a longer/larger
-> `search_large_candidates` sweep or rule mutations targeted at
-> larger morphologies.
+**Moderate-scale M8B result** (3 sources × 3 rules × 5 test seeds × T=300 × grid 48×48×6×6, 12 thick + 16 thin candidates, frozen-manifest reproducible):
+
+The large-candidate search itself shows a striking source asymmetry:
+
+| Source | total | thick | thin | thick-fraction |
+|---|---|---|---|---|
+| **M7_HCE_optimized** | 13 | 11 | 2 | **85%** |
+| M4A_viability | 8 | 1 | 7 | 12% |
+| M4C_observer_optimized | 7 | 0 | 7 | 0% |
+
+**M7 produces the morphology M8B requires; M4C does not produce a single thick candidate at this scale.**
+
+Mechanism distribution among M7 thick candidates (N_thick=11):
+
+| mechanism | count | fraction | 95% CI |
+|---|---|---|---|
+| **interior_reservoir** | **4** | **0.36** | [0.09, 0.64] |
+| global_chaotic | 4 | 0.36 | [0.09, 0.64] |
+| whole_body_hidden_support | 2 | 0.18 | [0.00, 0.45] |
+| unclear | 1 | 0.09 | [0.00, 0.27] |
+| **boundary_mediated** | **0** | **0.00** | [0.00, 0.00] |
+| environment_coupled | 0 | 0.00 | [0.00, 0.00] |
+
+Boundary-vs-interior paired (M7 thick, N=11): boundary per-cell +0.00002, interior per-cell +0.00004, **55% interior-dominant, 9% boundary-dominant, 36% similar**. The single M4A thick candidate classified as `global_chaotic`; M4C had no thick candidates.
+
+What this means:
+- ✅ **The M8 "88% boundary_mediated" label was largely an artifact of small-candidate shell-mask collapse.** Once thick candidates allow boundary and interior to be separated cleanly, **0/11 M7 thick candidates are boundary-mediated**. The dominant mechanism is **interior-dominant** (36% strict + 18% whole-body), not boundary-dominant.
+- ✅ **Environment-coupling does not dominate either** (0/11). The M8 mediation analysis observation that `env_hidden_effect ≈ 2× interior_hidden_effect` reflected raw region size differences; under per-cell normalization, environment per-cell effect collapses to ~0 across all M7 thick candidates. M8B's per-cell normalization correctly disambiguates this.
+- ✅ **M7 produces vastly more thick candidates than M4A or M4C**, suggesting that the HCE-guided fitness selected for rules whose projected candidates have non-trivial interior bodies.
+- ⚠️ **36% of M7 thick candidates classify as `global_chaotic`** (far-region effect ≥ 70% of candidate effect). At T=300 / grid 48×48×6×6 the local-vs-far separation is weaker than at the moderate-M8 scale, so the candidate-locality claim is partially eroded for thick candidates. A larger grid (so far-translated mask is more distant) would be the natural follow-up.
+- ⚠️ **N_thick=11 for M7 and N_thick=1 for M4A is underpowered for paired effect-size comparison.** The sign points the right direction (M7 HCE_whole +0.020 vs M4A +0.012, Cliff's δ +1.00), but the permutation p is 0.18 because the comparison group is one candidate.
+
+The headline interpretation, written carefully: **M7's hidden causal support among thick candidates is best described as interior-dominant whole-body coupling, not boundary-mediated and not environment-coupled.** The 36% `global_chaotic` rate among thick M7 candidates flags that locality is partially blurred at thick sizes, and a production-scale run with a larger grid (so the far-mask antipode is a more meaningful far-region control) is needed to confirm.
+
+> **Status**: M8B code is implemented; the moderate-scale empirical
+> disambiguation has landed. The dominant mechanism among M7 thick
+> candidates is **interior-dominant** (interior_reservoir 36% +
+> whole_body_hidden_support 18% = 54% of M7 thick), not
+> boundary-mediated and not environment-coupled. **A larger-grid /
+> longer-T production run is the natural next step** to (a) shrink
+> the 95% CIs (currently wide due to N_thick=11), (b) reduce the
+> global_chaotic rate by giving the far-mask a more distant antipode,
+> and (c) get matched-N thick comparisons against M4C/M4A.
 
 ## Key findings
 
