@@ -365,6 +365,15 @@ The success criterion: **identify at least one non-artifact mechanism
 by which hidden 4D state locally supports future projected 2D
 candidate dynamics.**
 
+> **Status**: M8 code is implemented and the smoke test produces full
+> outputs (12 plots, 7 CSVs, per-candidate response arrays,
+> frozen_manifest.json, summary.md) without errors. The 29 M8 tests
+> pass and the 252-test full suite has no regressions. **The
+> moderate-scale and production-scale empirical conclusions are
+> pending validation** — no mechanism result is claimed from M8 yet.
+> The M7 / M7B HCE finding stands; what M7B's HCE means
+> mechanistically is what M8 is meant to answer once the run lands.
+
 ## Key findings
 
 | Question | Result |
