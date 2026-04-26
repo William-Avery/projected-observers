@@ -920,6 +920,11 @@ def measure_candidate_m8(
     feats = candidate_hidden_features(snapshot_4d, interior_mask)
     near_thresh = float(feats.get("near_threshold_fraction", 0.0))
 
+    # Only compute_response_map supports the cuda-batched backend; the other
+    # helpers use single-grid rollouts via CA4D, which doesn't know
+    # "cuda-batched". Downgrade to plain "cuda" for them.
+    helper_backend = "cuda" if backend == "cuda-batched" else backend
+
     headline_h = horizons[len(horizons) // 2]
     rmap = compute_response_map(
         snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
@@ -929,22 +934,22 @@ def measure_candidate_m8(
     timing = compute_emergence_timing(
         snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
         candidate_id=candidate_id, horizons=horizons,
-        n_replicates=n_replicates, backend=backend, rng_seed=rng_seed + 1,
+        n_replicates=n_replicates, backend=helper_backend, rng_seed=rng_seed + 1,
     )
     pathway = compute_pathway_trace(
         snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
         candidate_id=candidate_id, n_steps=max(horizons),
-        backend=backend, rng_seed=rng_seed + 2,
+        backend=helper_backend, rng_seed=rng_seed + 2,
     )
     mediation = compute_mediation(
         snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
         candidate_id=candidate_id, horizon=headline_h,
-        n_replicates=n_replicates, backend=backend, rng_seed=rng_seed + 3,
+        n_replicates=n_replicates, backend=helper_backend, rng_seed=rng_seed + 3,
     )
     feat_dyn = compute_feature_dynamics(
         snapshot_4d=snapshot_4d, rule=rule, interior_mask=interior_mask,
         candidate_id=candidate_id, horizons=horizons,
-        backend=backend, rng_seed=rng_seed + 4,
+        backend=helper_backend, rng_seed=rng_seed + 4,
     )
     mech = classify_mechanism(
         rmap=rmap, timing=timing, pathway=pathway, mediation=mediation,
@@ -987,13 +992,18 @@ def run_m8_for_rule_seed(
     )
 
     bs = rule.to_bsrule()
+    # CA4D / simulate_4d_to_zarr don't recognize "cuda-batched"; downgrade
+    # to "cuda" for the simulation phase. measure_candidate_m8 still gets
+    # the original backend so it can route compute_response_map's per-
+    # column probes through the batched path.
+    sim_backend = "cuda" if backend == "cuda-batched" else backend
     cfg = RunConfig(
         world=WorldConfig(
             nx=grid_shape[0], ny=grid_shape[1], nz=grid_shape[2], nw=grid_shape[3],
             timesteps=timesteps, initial_density=rule.initial_density,
             rule_birth=tuple(int(x) for x in bs.birth),
             rule_survival=tuple(int(x) for x in bs.survival),
-            backend=backend,
+            backend=sim_backend,
         ),
         projection=ProjectionConfig(method="mean_threshold", theta=0.5),
         detection=DetectionConfig(),

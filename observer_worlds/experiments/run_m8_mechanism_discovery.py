@@ -40,7 +40,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--hce-replicates", type=int, default=3)
     p.add_argument("--horizons", type=int, nargs="+",
                    default=[1, 2, 3, 5, 10, 20, 40, 80])
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numpy")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda", "cuda-batched"], default="numpy")
     p.add_argument("--out-root", type=str, default="outputs")
     p.add_argument("--label", type=str, default="m8")
     p.add_argument("--quick", action="store_true")

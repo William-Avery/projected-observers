@@ -54,7 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sampler-seed", type=int, default=0)
     p.add_argument("--timesteps", type=int, default=200)
     p.add_argument("--grid", type=int, nargs=4, default=[32, 32, 4, 4])
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numba")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numba")
     p.add_argument("--fitness-mode", choices=list(FITNESS_MODES),
                    default="lifetime_weighted")
     p.add_argument("--rollout-steps", type=int, default=6)

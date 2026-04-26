@@ -39,7 +39,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Top-K candidates by observer_score per (rule, seed).")
     p.add_argument("--replicates", type=int, default=5)
     p.add_argument("--horizons", type=int, nargs="+", default=[5, 10, 20, 40, 80])
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numba")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numba")
     p.add_argument("--n-cv-splits", type=int, default=5)
     p.add_argument("--out-root", type=str, default="outputs")
     p.add_argument("--label", type=str, default="m6c")

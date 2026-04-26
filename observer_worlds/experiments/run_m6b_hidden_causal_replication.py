@@ -47,7 +47,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Max candidates PER selection mode (3 modes total).")
     p.add_argument("--replicates", type=int, default=5)
     p.add_argument("--horizons", type=int, nargs="+", default=[5, 10, 20, 40, 80])
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numba")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numba")
     p.add_argument("--no-per-step-shuffled", action="store_true",
                    help="Skip the per-step-shuffled condition (faster smoke).")
     p.add_argument("--n-bootstrap", type=int, default=2000)

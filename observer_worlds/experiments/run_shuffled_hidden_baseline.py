@@ -52,7 +52,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    metavar=("NX", "NY", "NZ", "NW"))
     p.add_argument("--timesteps", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--backend", choices=["numba", "numpy"], default=None)
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default=None)
     p.add_argument("--label", type=str, default=None)
     p.add_argument("--output-root", type=str, default=None)
     p.add_argument("--no-gif", action="store_true")

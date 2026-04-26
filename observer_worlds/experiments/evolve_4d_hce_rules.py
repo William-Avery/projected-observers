@@ -56,7 +56,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--hce-replicates", type=int, default=3)
     p.add_argument("--horizons", type=int, nargs="+", default=[10, 20, 40])
     p.add_argument("--top-k", type=int, default=10)
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numpy")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numpy")
     p.add_argument("--seed-population", type=str, default=None,
                    help="Path to an M4A or M4C leaderboard.json to seed initial pop.")
     p.add_argument("--sampler-seed", type=int, default=0)

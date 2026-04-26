@@ -64,7 +64,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-candidates", type=int, default=30)
     p.add_argument("--hce-replicates", type=int, default=5)
     p.add_argument("--horizons", type=int, nargs="+", default=[5, 10, 20, 40, 80])
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numpy")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numpy")
     p.add_argument("--out-root", type=str, default="outputs")
     p.add_argument("--label", type=str, default="m7_holdout")
     p.add_argument("--quick", action="store_true",

@@ -34,7 +34,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-eval-seed", type=int, default=10000,
                    help="Base seed for per-rule scout simulations; each rule "
                         "uses base_eval_seed..base_eval_seed+seeds-1.")
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numba")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numba")
     p.add_argument("--min-component-age", type=int, default=20)
     p.add_argument("--early-abort", action="store_true", default=True)
     p.add_argument("--no-early-abort", dest="early_abort", action="store_false")

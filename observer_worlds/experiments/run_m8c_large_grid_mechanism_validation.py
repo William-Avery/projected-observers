@@ -62,7 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    default=[1, 2, 3])
     p.add_argument("--min-far-distance-floor", type=int, default=32)
     p.add_argument("--min-far-distance-radius-mult", type=float, default=5.0)
-    p.add_argument("--backend", choices=["numpy", "numba"], default="numpy")
+    p.add_argument("--backend", choices=["numpy", "numba", "cuda"], default="numpy")
     p.add_argument("--out-root", type=str, default="outputs")
     p.add_argument("--label", type=str, default="m8c")
     p.add_argument("--quick", action="store_true")

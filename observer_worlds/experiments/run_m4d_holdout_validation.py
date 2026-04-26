@@ -96,7 +96,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--grid", type=int, nargs=4, default=[64, 64, 8, 8])
     p.add_argument("--rollout-steps", type=int, default=6)
     p.add_argument("--initial-density-2d-life", type=float, default=0.30)
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numba")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numba")
     p.add_argument("--video-frames-kept", type=int, default=120)
     p.add_argument("--snapshots-per-run", type=int, default=2)
     p.add_argument("--n-bootstrap", type=int, default=2000)

@@ -54,7 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-dir", type=str, default=None)
     p.add_argument("--label", type=str, default="m5")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--backend", choices=["numba", "numpy"], default="numpy")
+    p.add_argument("--backend", choices=["numba", "numpy", "cuda"], default="numpy")
     return p
 
 
