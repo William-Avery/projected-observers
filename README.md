@@ -577,6 +577,81 @@ The interpretation engine fired the strong-confirmation paragraph: *"Large-grid 
 > the natural next step both to tighten CIs and to test whether the
 > global_chaotic minority shrinks at even larger geometric ratios.
 
+### M8D — Global-chaotic decomposition
+
+> **Why**: M8B (36%) and M8C (33%) both surface a persistent ~1/3
+> minority of M7 thick candidates that classify as `global_chaotic`
+> (far-region hidden effect ≥ 70% of candidate-body effect). M8C
+> showed strengthening far-control geometry from 24-cell antipode to
+> 5×candidate-radius shifted that fraction by only 3 percentage
+> points. So `global_chaotic` is not a geometry artifact — but
+> calling those candidates "globally chaotic" treats six different
+> phenomena as one bucket. M8D decomposes the bucket: is it (A)
+> true system-wide instability, (B) broad hidden coupling that
+> decays with distance, (C) high background sensitivity in those
+> worlds, (D) a remaining far-control artifact, (E) volatility /
+> threshold-mediated, or (F) genuinely unresolved?
+
+Implements per-candidate:
+
+- **Multi-distance probes** at body, env shell, 2× / 5× / 10×
+  candidate radius, antipode, plus 5 random translations. Linear
+  decay fit over the non-body probes gives `decay_slope`,
+  `decay_floor`, `decay_intercept`.
+- **System-level background sampling**: 16 random hidden perturbations
+  not tied to any candidate, each ~8 cells in 2D, run forward to the
+  same horizon. The candidate's `body_over_background` and
+  `far_over_background` ratios anchor every M8D classification rule.
+- **Feature audit**: 8 hidden-state features (M6C) compared between
+  global_chaotic candidates and interior_reservoir +
+  whole_body_hidden_support controls — same statistics M6C used for
+  the threshold artifact audit.
+- **Stabilization variants**: baseline, shorter horizon, threshold
+  filter, and a **local-window rollout** that freezes everything
+  outside `dilation(5)` of the candidate. If the local-window variant
+  no longer fires `global_chaotic`, the original label was reflecting
+  propagation through the world rather than candidate-intrinsic
+  support.
+- **6-subclass relabel** of `global_chaotic`: `global_instability`,
+  `broad_hidden_coupling`, `background_sensitive_world`,
+  `far_control_artifact`, `threshold_volatility_artifact`,
+  `unresolved_global`. Decision rules check stabilization first
+  (local-window removes → `broad_hidden_coupling`), then features
+  (high near-threshold or volatility → `threshold_volatility_artifact`),
+  then antipode-only spike (`far_control_artifact`), then background
+  comparison (`background_sensitive_world`), then decay slope
+  (negative → `broad_hidden_coupling`, ~zero → `global_instability`).
+
+Outputs (under `outputs/m8d_<UTC>/`): `frozen_manifest.json`,
+`multi_distance_effects.csv`, `background_sensitivity.csv`,
+`global_candidate_features.csv`, `stabilization_results.csv`,
+`relabeled_mechanisms.csv`, `condition_summary.csv`,
+`stats_summary.json`, 12 plots (effect_decay_by_distance,
+global_vs_interior_decay_curves, candidate_body_vs_background_effect,
+far_effect_vs_background_distribution,
+global_class_feature_comparison,
+threshold_margin_global_vs_local, hidden_volatility_global_vs_local,
+stabilization_reclassification_rates, global_subclass_distribution,
+body/far_over_background_by_subclass, example_global_candidate_traces),
+and `summary.md` with six canonical interpretation paragraphs:
+
+- *"The global-chaotic subset reflects true system-wide hidden instability."*
+- *"The global-chaotic subset is better described as broad hidden coupling, not pure artifact."*
+- *"Global-chaotic labels arise from high background hidden sensitivity in those worlds."*
+- *"Global-chaotic candidates are largely volatility or threshold-mediated."*
+- *"Global-chaotic labels reflect propagation through the broader world rather than candidate-intrinsic support."* (when local-window stabilization removes ≥ 50% of global labels)
+- *"Even globally sensitive candidates retain candidate-specific hidden support."* (when body_over_background > 1.5)
+
+> **Status**: M8D code is implemented; smoke test produces full
+> outputs (12 plots, 6 CSVs, frozen manifest, summary.md). 19 new
+> tests pass; 316-test full suite has no regressions. **The
+> empirical decomposition of M8C's global_chaotic minority is
+> pending** — a real run with grid 96×96×8×8, T=600, 40 seeds, 3
+> rules per source produces ~30 thick global_chaotic candidates per
+> source for stable subclass estimates and takes ~1.5–2× M8C
+> compute (the multi-distance probes + background sampling +
+> stabilization variants are the dominant cost).
+
 ## Key findings
 
 | Question | Result |
