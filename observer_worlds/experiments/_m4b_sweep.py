@@ -546,6 +546,43 @@ def run_one_condition(
 # ---------------------------------------------------------------------------
 
 
+def _run_one_condition_for_parallel(
+    item: tuple[int, int, str], shared: dict
+) -> ConditionResult:
+    ri, seed, cond = item
+    rules = shared["rules"]
+    rule = rules[ri]
+    return run_one_condition(
+        condition=cond, rule_idx=ri, seed=seed,
+        rule_4d=rule, rule_2d=shared["rule_2d"],
+        grid_shape_4d=shared["grid_shape_4d"],
+        grid_shape_2d=shared["grid_shape_2d"],
+        timesteps=shared["timesteps"],
+        initial_density_4d=rule.initial_density,
+        initial_density_2d=shared["initial_density_2d"],
+        detection_config=shared["detection_config"],
+        backend=shared["backend"],
+        rollout_steps=shared["rollout_steps"],
+        video_frames_kept=shared["video_frames_kept"],
+        snapshot_at=shared["snapshot_at"],
+    )
+
+
+class _ParallelTask:
+    """Picklable task dispatcher for parallel_sweep.
+
+    joblib loky pickles the callable by reference (qualified name) and
+    re-imports it in the worker; nested closures aren't picklable. This
+    class binds the per-sweep ``shared`` dict to a top-level callable.
+    """
+
+    def __init__(self, shared: dict) -> None:
+        self.shared = shared
+
+    def __call__(self, item: tuple[int, int, str]) -> ConditionResult:
+        return _run_one_condition_for_parallel(item, self.shared)
+
+
 def run_sweep(
     *,
     rules: list[FractionalRule],
@@ -561,59 +598,73 @@ def run_sweep(
     video_frames_kept: int = 0,
     snapshots_per_run: int = 2,
     progress: Callable[[str], None] | None = None,
+    n_workers: int | None = None,
 ) -> list[PairedRecord]:
     """Run the full (rules x seeds x conditions) sweep.
 
-    Snapshots are taken at evenly-spaced timesteps:
-        snapshot_at = [int(timesteps * k / (snapshots_per_run + 1))
-                       for k in range(1, snapshots_per_run + 1)]
+    When ``n_workers != 1``, work is parallelized over (rule_idx, seed,
+    condition) triples via ``parallel_sweep``. Default n_workers is
+    cpu_count - 2.
     """
+    from observer_worlds.parallel import parallel_sweep
+
     snapshot_at = [
         int(timesteps * k / (snapshots_per_run + 1))
         for k in range(1, snapshots_per_run + 1)
     ]
-    records: list[PairedRecord] = []
-    total = len(rules) * len(seeds)
-    n_done = 0
+
+    # Flatten work items.
+    items: list[tuple[int, int, str]] = [
+        (ri, seed, cond)
+        for ri in range(len(rules))
+        for seed in seeds
+        for cond in CONDITION_NAMES
+    ]
+
+    shared = {
+        "rules": rules,
+        "rule_2d": rule_2d,
+        "grid_shape_4d": grid_shape_4d,
+        "grid_shape_2d": grid_shape_2d,
+        "timesteps": timesteps,
+        "initial_density_2d": initial_density_2d,
+        "detection_config": detection_config,
+        "backend": backend,
+        "rollout_steps": rollout_steps,
+        "video_frames_kept": video_frames_kept,
+        "snapshot_at": snapshot_at,
+    }
+
     t0 = time.time()
+    flat_results = parallel_sweep(
+        items,
+        _ParallelTask(shared),
+        n_workers=n_workers,
+        progress=progress,
+    )
+    elapsed = time.time() - t0
+    if progress is not None:
+        progress(
+            f"  sweep wall time {elapsed:.0f}s "
+            f"({len(items)} runs across {len(rules)} rules x "
+            f"{len(seeds)} seeds x {len(CONDITION_NAMES)} conditions)"
+        )
+
+    # Regroup flat list -> PairedRecord per (rule_idx, seed).
+    by_pair: dict[tuple[int, int], dict[str, ConditionResult]] = {}
+    for (ri, seed, cond), result in zip(items, flat_results):
+        by_pair.setdefault((ri, seed), {})[cond] = result
+
+    records: list[PairedRecord] = []
     for ri, rule in enumerate(rules):
         for seed in seeds:
-            results = {}
-            for cond in CONDITION_NAMES:
-                results[cond] = run_one_condition(
-                    condition=cond, rule_idx=ri, seed=seed,
-                    rule_4d=rule, rule_2d=rule_2d,
-                    grid_shape_4d=grid_shape_4d,
-                    grid_shape_2d=grid_shape_2d,
-                    timesteps=timesteps,
-                    initial_density_4d=rule.initial_density,
-                    initial_density_2d=initial_density_2d,
-                    detection_config=detection_config,
-                    backend=backend,
-                    rollout_steps=rollout_steps,
-                    video_frames_kept=video_frames_kept,
-                    snapshot_at=snapshot_at,
-                )
-            n_done += 1
-            elapsed = time.time() - t0
-            rate = n_done / elapsed if elapsed > 0 else float("inf")
-            eta = (total - n_done) / rate if rate > 0 else float("inf")
-            if progress is not None:
-                progress(
-                    f"  pair {n_done}/{total} (rule {ri+1}/{len(rules)}, seed {seed}) "
-                    f"elapsed={elapsed:.0f}s eta={eta:.0f}s "
-                    f"-- coh:{results['coherent_4d'].n_candidates}c "
-                    f"shuf:{results['shuffled_4d'].n_candidates}c "
-                    f"2d:{results['matched_2d'].n_candidates}c"
-                )
-            records.append(
-                PairedRecord(
-                    rule_idx=ri, seed=seed, rule_dict=rule.to_dict(),
-                    coherent_4d=results["coherent_4d"],
-                    shuffled_4d=results["shuffled_4d"],
-                    matched_2d=results["matched_2d"],
-                )
-            )
+            triple = by_pair[(ri, seed)]
+            records.append(PairedRecord(
+                rule_idx=ri, seed=seed, rule_dict=rule.to_dict(),
+                coherent_4d=triple["coherent_4d"],
+                shuffled_4d=triple["shuffled_4d"],
+                matched_2d=triple["matched_2d"],
+            ))
     return records
 
 
