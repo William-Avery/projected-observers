@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Run artefacts (everything under outputs/ except .gitkeep)
+outputs/*
+!outputs/.gitkeep
+
+# Zarr stores anywhere on disk
+*.zarr/
+
+# OS
+.DS_Store
+Thumbs.db
