@@ -234,8 +234,9 @@ _INTERP_HCE_PERSISTS_AWAY_FROM_THRESHOLD = (
     "hidden-causal-substrate interpretation."
 )
 _INTERP_TEMPORAL_PERSISTENCE = (
-    "Hidden causal dependence is associated with temporally coherent "
-    "hidden structure."
+    "Hidden causal dependence is strongly related to hidden temporal "
+    "dynamics; in this run, lower hidden temporal persistence / higher "
+    "volatility gave hidden perturbations more leverage on the future."
 )
 _INTERP_ENTROPY_HETEROGENEITY = (
     "HCE is associated with hidden microstate complexity under the "

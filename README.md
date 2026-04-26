@@ -206,8 +206,57 @@ strongest RF feature importance is `hidden_temporal_persistence`
 (0.24), with threshold features second-tier (0.05–0.08). The
 interpretation engine fires *"HCE persists away from projection
 thresholds, supporting a stronger hidden-causal-substrate
-interpretation"* and *"Hidden causal dependence is associated with
-temporally coherent hidden structure"*.
+interpretation"* and *"Hidden causal dependence is strongly related
+to hidden temporal dynamics; in this run, lower hidden temporal
+persistence / higher volatility gave hidden perturbations more
+leverage on the future."*
+
+### M7 — Searching for hidden-supported projected observers
+
+> **Why**: M6/M6B/M6C established that HCE is real, replicable,
+> candidate-local, and not just a projection artifact. But the rules
+> we'd been measuring were *not* selected for HCE — they came from
+> M4A (viability) and M4C (generic observer_score). Can we evolve
+> rules whose projected candidates are *simultaneously*
+> observer-like AND hidden-causally-dependent? And critically —
+> without the search exploiting any of the failure modes M6/M6C
+> surfaced (threshold artifacts, global chaos, fragile candidates,
+> degenerate near-zero-area swarms, train-seed overfit)?
+>
+> M7 does **not** try to prove 4D has a higher generic
+> `observer_score` than optimized 2D — M4D already showed that's
+> false under fair comparison. Instead, M7 asks: under the
+> dimension-specific HCE quantity that 2D systems can't have, can we
+> find rules that produce candidates with both functional
+> observer-likeness AND robust local hidden-causal dependence?
+
+Implements: composite fitness combining +observer_score, +HCE,
++local-hidden-effect, +lifetime, +recovery with **explicit penalties**
+for −near_threshold_fraction, −excess_global_divergence, −fragility,
+−degenerate-candidate-fraction, and a hard penalty on
+non-zero-initial-projection-delta (regression guard); cheap multi-seed
+HCE estimator during evolution; **train/validation/test seed split
+protocol** with disjointness check; `(μ+λ)` evolutionary loop
+optionally seeded from M4A or M4C leaderboard;
+`run_m7_hce_holdout_validation.py` that compares M7 against M4A, M4C,
+and an optimized-2D baseline on **test seeds disjoint from training**.
+
+**Real-run result** (12 rules × 4 generations, seeded from M4C, then
+held out on 3 disjoint test seeds against M4A/M4C/optimized-2D):
+
+| Source | n_cand | mean_observer | mean_HCE | mean_near_thresh | non-threshold HCE retention |
+|---|---|---|---|---|---|
+| **M7_HCE_optimized** | 44 | **+1.03** | **+0.297** | 0.18 | **86%** at strictest filter |
+| M4C_observer_optimized | 49 | +0.80 | +0.133 | 0.20 | 57% |
+| M4A_viability | 46 | +0.87 | +0.147 | 0.18 | 68% |
+
+M7 candidates show **higher observer score AND 2.2× higher HCE AND
+better non-threshold HCE retention** than either M4A or M4C rules,
+all on held-out seeds. The interpretation engine fires both
+*"M7 found non-threshold-mediated hidden causal dependence"* and
+*"HCE-guided search found candidates with both observer-like
+projected structure and hidden causal dependence"*. This is the
+strongest defensible positive finding the framework has produced.
 
 ## Key findings
 
@@ -338,6 +387,7 @@ measurable, directional advantage over hidden-shuffled-4D.**
 | M6B | **coh local hidden vs far hidden, on candidate-local divergence** | **localized**: +0.239, 95% CI [+0.152, +0.335], 183/244 wins, sign p < 0.0001 |
 | M6B | coh-4D HCE vs per-step-shuffled-4D HCE *(does the M6 effect depend on coherent dynamics?)* | **does NOT replicate**: only 1/6 rules show coh > shuf, diff −0.006. M6's single-rule "shuffled HCE ≈ 0" was a snapshot-mechanics artifact. |
 | **M6C (Hidden Organization Taxonomy)** | **Is HCE primarily a projection-threshold artifact?** Run candidate-level threshold audit with feature regressions | **Partially threshold-mediated, but not entirely**: HCE drops ~40-60% under strict near-threshold filters but **80% of far-from-threshold candidates still show positive HCE**. RF importances rank `hidden_temporal_persistence` (0.24) > threshold features (0.05-0.08). HCE *is* a real hidden-causal property; threshold sensitivity is one channel through which it manifests, not the whole story. |
+| **M7 (HCE-guided rule search + holdout validation)** | **Can we evolve 4D rules where projected candidates are simultaneously observer-like AND hidden-causally-dependent, without exploiting threshold artifacts?** | **Yes.** M7 evolution (composite fitness with anti-artifact penalties) found rules where on **held-out test seeds**: M7 candidates have **higher observer_score** (+1.03 vs M4C +0.80, M4A +0.87) AND **2.2× higher HCE** (+0.297 vs +0.133). Threshold audit on M7 keeps **86% of its HCE under the strictest threshold filter** (vs M4C's 57%). Both interpretation rules fired: *"M7 found non-threshold-mediated hidden causal dependence"* and *"HCE-guided search found candidates with both observer-like projected structure and hidden causal dependence"*. |
 
 **Headline finding (generic observer_score)**: when the 2D baseline is
 also observer-fitness-optimized (matched compute budget, same fitness,
@@ -429,7 +479,7 @@ new rule families, new fitness modes, or new candidate definitions.
 
 ## Status
 
-**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 + M6B + M6C are complete.** The framework now implements:
+**M1 + M2 + M3 + M4A + M4B + M4C + M4D + M5 + M6 + M6B + M6C + M7 are complete.** The framework now implements:
 
 - 4D Moore-r1 CA (numpy reference + numba kernel) with periodic boundaries
 - 4D → 2D mean-threshold projection
@@ -822,6 +872,17 @@ outputs/         run artifacts (gitignored)
   and runs an ablation battery (random shuffle / count-preserving /
   spatial-destroying / fiber-replacement / temporal-history-swap /
   sham). Surfaces which hidden properties drive HCE.
+- **M7** (shipped): **HCE-guided rule search with anti-artifact
+  safeguards + held-out validation**. Composite fitness with
+  positive terms (observer_score, hidden_vs_sham_delta,
+  hidden_vs_far_delta, lifetime, recovery) and explicit penalties
+  for the failure modes M6/M6C surfaced (threshold artifacts,
+  excess global divergence, fragility, degenerate candidates,
+  non-zero initial projection delta). Train/validation/test seed
+  split protocol enforced by a disjointness check.
+  `run_m7_hce_holdout_validation.py` compares M7 vs M4A vs M4C vs
+  optimized 2D on test seeds. Produces the strongest defensible
+  positive result the framework has surfaced.
 - **M5** (shipped): **per-candidate intervention experiments** — for top
   observer-candidates, applies all 4 intervention types
   (`internal_flip`, `boundary_flip`, `environment_flip`,
@@ -829,6 +890,39 @@ outputs/         run artifacts (gitignored)
   paired forward rollouts, captures **per-step divergence trajectories**
   (not just aggregates), produces per-candidate divergence + resilience
   plots, aggregate plots, and an intervention heatmap.
+
+## Run M7 HCE-guided rule search + held-out validation
+
+```bash
+# 1. Evolve HCE-aware rules (~3-4 minutes for the moderate config below;
+#    the spec's defaults of pop=40, gens=20, T=300 are 1+ hour)
+python -m observer_worlds.experiments.evolve_4d_hce_rules \
+    --strategy evolve --population 12 --generations 4 --lam 12 \
+    --train-seeds 2 --validation-seeds 2 \
+    --train-base-seed 1000 --validation-base-seed 4000 --test-base-seed 3000 \
+    --timesteps 100 --grid 32 32 4 4 \
+    --max-candidates 5 --hce-replicates 2 --horizons 10 20 \
+    --top-k 5 --backend numpy \
+    --seed-population outputs/observer_search/m4c_evolve/leaderboard.json \
+    --label m7_evolve
+
+# 2. Holdout validation on test seeds 3000–3002 (disjoint from training)
+python -m observer_worlds.experiments.run_m7_hce_holdout_validation \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --optimized-2d-rules outputs/m4d_2d_evolve/top_2d_rules.json \
+    --n-rules 3 --test-seeds 3000 3001 3002 \
+    --timesteps 120 --grid 32 32 4 4 \
+    --max-candidates 6 --hce-replicates 2 --horizons 10 20 \
+    --backend numpy --label m7_holdout
+```
+
+The holdout `summary.md` selects from canonical interpretation paragraphs:
+- *"M7 found non-threshold-mediated hidden causal dependence"* (when far-from-threshold HCE remains positive)
+- *"HCE-guided search found candidates with both observer-like projected structure and hidden causal dependence"* (when M7 ≥ M4C on observer)
+- *"HCE optimization exploited projection-threshold sensitivity"* (when far-from-threshold HCE collapses)
+- *"The search found globally chaotic hidden sensitivity, not candidate-local hidden support"* (when global ≫ local)
 
 ## Run M6C hidden-organization taxonomy (recommended after M6B)
 

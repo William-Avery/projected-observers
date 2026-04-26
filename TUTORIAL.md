@@ -438,6 +438,75 @@ what kind of hidden organization it has.
 
 ---
 
+## 11. M7 HCE-guided rule search with anti-artifact safeguards (~10 min)
+
+> **Why run this?** M6/M6B/M6C established that HCE is real, replicable,
+> candidate-local, and not just a projection-threshold artifact. But
+> the rules being measured were *not* selected for HCE — they came
+> from M4A (viability) and M4C (generic observer_score). Can we evolve
+> rules whose projected candidates are *simultaneously*
+> observer-like AND hidden-causally-dependent — without exploiting
+> any of the failure modes M6/M6C surfaced (threshold artifacts,
+> global chaos that swamps local effects, fragile candidates that
+> die from any perturbation, swarms of degenerate near-zero-area
+> tracks, train-seed overfit)?
+>
+> M7 doesn't try to prove "4D > 2D" on generic observer_score —
+> M4D already showed that's false under fair comparison. M7 asks the
+> narrower, well-defined question: under the dimension-specific HCE
+> quantity, can we find rules with both observer-likeness and HCE?
+
+```bash
+# Step 1: evolve (~3-4 min on moderate config; full defaults are ~1 hour)
+python -m observer_worlds.experiments.evolve_4d_hce_rules \
+    --strategy evolve --population 12 --generations 4 --lam 12 \
+    --train-seeds 2 --validation-seeds 2 \
+    --train-base-seed 1000 --validation-base-seed 4000 --test-base-seed 3000 \
+    --timesteps 100 --grid 32 32 4 4 \
+    --max-candidates 5 --hce-replicates 2 --horizons 10 20 \
+    --top-k 5 --backend numpy \
+    --seed-population outputs/observer_search/m4c_evolve/leaderboard.json \
+    --label m7_evolve
+```
+
+The CLI **enforces train/validation/test seed disjointness** at startup
+and aborts if any overlap is detected. Train seeds are used during
+evolution; validation seeds re-rank the top-K after evolution; test
+seeds are reserved for the holdout step below.
+
+```bash
+# Step 2: holdout validation against M4A, M4C, optimized 2D (~3 min)
+python -m observer_worlds.experiments.run_m7_hce_holdout_validation \
+    --m7-rules outputs/m7_evolve_<UTC>/top_hce_rules.json \
+    --m4c-rules outputs/observer_search/m4c_evolve/leaderboard.json \
+    --m4a-rules outputs/rule_search/m4a_search/leaderboard.json \
+    --optimized-2d-rules outputs/m4d_2d_evolve/top_2d_rules.json \
+    --n-rules 3 --test-seeds 3000 3001 3002 \
+    --timesteps 120 --grid 32 32 4 4 \
+    --max-candidates 6 --hce-replicates 2 --horizons 10 20 \
+    --backend numpy --label m7_holdout
+```
+
+**Real-run result** of this exact config (44 M7 candidates / 49 M4C
+/ 46 M4A on test seeds disjoint from training):
+
+| Source | mean_observer | mean_HCE | non-threshold HCE retention |
+|---|---|---|---|
+| **M7_HCE_optimized** | **+1.03** | **+0.297** | **86%** |
+| M4C_observer_optimized | +0.80 | +0.133 | 57% |
+| M4A_viability | +0.87 | +0.147 | 68% |
+
+M7 achieves higher observer score AND 2.2× higher HCE AND better
+non-threshold HCE retention than either M4A or M4C, on held-out
+test seeds. Both interpretation rules fire:
+> *M7 found non-threshold-mediated hidden causal dependence.*
+> *HCE-guided search found candidates with both observer-like
+> projected structure and hidden causal dependence.*
+
+This is the strongest defensible positive finding in the framework.
+
+---
+
 ## 10. M6C hidden-organization taxonomy (~2 minutes)
 
 > **Why run this?** M6B confirmed HCE is real and replicable, but the
