@@ -81,6 +81,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--label", type=str, default="m7b_production")
     p.add_argument("--allow-invariant-violation", action="store_true",
                    help="Don't fail when initial_projection_delta exceeds tolerance.")
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="Process-parallelism: number of worker processes "
+                        "for the (rule, seed) sweep within each source. "
+                        "Default: cpu_count-2.")
     p.add_argument("--quick", action="store_true")
     return p
 
@@ -681,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
             timesteps=args.timesteps, max_candidates=args.max_candidates,
             horizons=args.horizons, n_replicates=args.hce_replicates,
             backend=args.backend, workdir=workdir / src_name, progress=print,
+            n_workers=args.n_workers,
         )
         valid, invalid = split_valid_invalid_rows(rows)
         n_invalid += len(invalid)

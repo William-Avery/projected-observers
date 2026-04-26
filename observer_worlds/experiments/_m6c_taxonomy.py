@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -474,6 +476,41 @@ def run_taxonomy_for_rule_seed(
     return rows
 
 
+def _run_taxonomy_for_parallel(
+    item: tuple[FractionalRule, str, str, int], shared: dict
+) -> list[M6CRow]:
+    rule, rule_id, rule_source, seed = item
+    return run_taxonomy_for_rule_seed(
+        rule=rule, rule_id=rule_id, rule_source=rule_source,
+        seed=seed,
+        grid_shape=shared["grid_shape"],
+        timesteps=shared["timesteps"],
+        max_candidates=shared["max_candidates"],
+        horizons=shared["horizons"],
+        n_replicates=shared["n_replicates"],
+        backend=shared["backend"],
+        workdir=shared["workdir"],
+        progress=None,
+    )
+
+
+class _M6CParallelTask:
+    """Picklable task dispatcher for parallel_sweep.
+
+    joblib loky pickles the callable by reference (qualified name) and
+    re-imports it in the worker; nested closures aren't picklable. This
+    class binds the per-sweep ``shared`` dict to a top-level callable.
+    """
+
+    def __init__(self, shared: dict) -> None:
+        self.shared = shared
+
+    def __call__(
+        self, item: tuple[FractionalRule, str, str, int]
+    ) -> list[M6CRow]:
+        return _run_taxonomy_for_parallel(item, self.shared)
+
+
 def run_m6c_taxonomy(
     *,
     rules: list[tuple[FractionalRule, str, str]],
@@ -481,25 +518,58 @@ def run_m6c_taxonomy(
     grid_shape, timesteps,
     max_candidates: int,
     horizons: list[int], n_replicates: int,
-    backend: str, workdir, progress=None,
+    backend: str, workdir,
+    progress: Callable[[str], None] | None = None,
+    n_workers: int | None = None,
 ) -> list[M6CRow]:
-    rows: list[M6CRow] = []
-    n_total = len(rules) * len(seeds)
-    n_done = 0
+    """Driver. Returns a flat list of M6CRow across all
+    (rule, seed, candidate, horizon).
+
+    Work is parallelized over (rule, seed) tuples via ``parallel_sweep``.
+    Default ``n_workers`` is ``cpu_count - 2``; on machines with <= 2
+    cores this resolves to 1 and the serial path is used. Pass
+    ``n_workers=1`` explicitly to force serial.
+    """
+    from observer_worlds.parallel import parallel_sweep
+
+    items: list[tuple[FractionalRule, str, str, int]] = [
+        (rule, rule_id, rule_source, seed)
+        for rule, rule_id, rule_source in rules
+        for seed in seeds
+    ]
+
+    shared = {
+        "grid_shape": grid_shape,
+        "timesteps": timesteps,
+        "max_candidates": max_candidates,
+        "horizons": horizons,
+        "n_replicates": n_replicates,
+        "backend": backend,
+        # Normalize to Path so workers (and the serial path) can do
+        # ``workdir / f"{rule_id}_seed{seed}"`` even if a string was
+        # passed in.
+        "workdir": Path(workdir),
+    }
+
+    # Forward live per-task lines to stderr when a progress callback is
+    # provided -- otherwise long sweeps go silent for hours.
+    verbose = 10 if progress is not None else 0
+
     t0 = time.time()
-    for rule, rule_id, rule_source in rules:
-        for seed in seeds:
-            n_done += 1
-            elapsed = time.time() - t0
-            eta = (elapsed / n_done) * (n_total - n_done) if n_done > 0 else 0.0
-            if progress:
-                progress(f"  [{n_done}/{n_total}] rule={rule_id} src={rule_source} "
-                         f"seed={seed}  elapsed={elapsed:.0f}s eta={eta:.0f}s")
-            rows.extend(run_taxonomy_for_rule_seed(
-                rule=rule, rule_id=rule_id, rule_source=rule_source,
-                seed=seed, grid_shape=grid_shape, timesteps=timesteps,
-                max_candidates=max_candidates, horizons=horizons,
-                n_replicates=n_replicates, backend=backend,
-                workdir=workdir, progress=progress,
-            ))
+    flat_results = parallel_sweep(
+        items,
+        _M6CParallelTask(shared),
+        n_workers=n_workers,
+        progress=progress,
+        verbose=verbose,
+    )
+    elapsed = time.time() - t0
+    if progress is not None:
+        progress(
+            f"  m6c sweep wall time {elapsed:.0f}s "
+            f"({len(items)} runs across {len(rules)} rules x "
+            f"{len(seeds)} seeds)"
+        )
+
+    rows: list[M6CRow] = [row for sublist in flat_results for row in sublist]
     return rows
