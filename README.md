@@ -393,6 +393,76 @@ What this rules out and what it shows:
 
 The moderate-scale run is therefore **positive on HCE replication, candidate-locality, and absence-of-artifact**, but **inconclusive on which spatial sub-region of the candidate carries the mechanism**. A production-scale run (larger grid, longer T, longer-lived candidates so erosion produces a non-empty interior) is needed to cleanly classify the mechanism. The M8 code milestone stands; the specific mechanism class label is pending production validation.
 
+### M8B — Spatial mechanism disambiguation
+
+> **Why**: M8 confirmed M7's HCE is replicable, candidate-local, not
+> threshold-mediated, and not global chaos — but at typical candidate
+> sizes (most under 10 cells), erosion gives an empty interior and the
+> shell-mask code falls back to using the entire mask as the boundary.
+> That structurally pegs `boundary_mediation_index ≈ 0.50` and
+> prevents any clean boundary-vs-interior decomposition. M8 also did
+> not test environment-coupling explicitly: its response map only
+> probes (interior ∪ boundary). So when the M8 mediation analysis
+> showed `environment_hidden_effect ≈ 2× interior_hidden_effect` for
+> M7, the classifier missed it.
+>
+> M8B's question is the one M8 left open:
+> **is M7's hidden causal support boundary-mediated, interior-
+> reservoir-like, environment-coupled, whole-body, or only a thin-
+> body phenomenon?**
+
+Implements two CLIs:
+
+1. **`search_large_candidates.py`** — iterates over rules and seeds at
+   production grid sizes, applies a **morphology gate** (4 classes:
+   `very_thick_candidate` for area ≥ 50 with non-empty erosion-2
+   interior; `thick_candidate` for area ≥ 25 with non-empty erosion-1
+   interior and a non-empty environment shell; `thin_candidate` if
+   either erosion is empty; `degenerate` for ≤1-cell or empty masks),
+   and saves a CSV indexed by (rule, seed, track) plus per-candidate
+   2D mask snapshots. Reuses the underlying ZarrRunStore with 4D
+   snapshots.
+2. **`run_m8b_spatial_mechanism_disambiguation.py`** — consumes that
+   CSV, for each candidate runs **region-aware response measurements**
+   on five regions independently (interior, boundary, environment at
+   widths 1/2/3, whole-candidate, far) with **per-cell normalization**
+   (effect ÷ number of perturbed 4D cells = `n_2d × Nz × Nw`) so that
+   environment regions — which are larger than the candidate body —
+   are not falsely flagged just because they cover more cells. A v2
+   classifier that **never returns `boundary_mediated`,
+   `interior_reservoir`, or `whole_body_hidden_support` for thin
+   morphologies** (those get `candidate_local_thin` or
+   `environment_coupled_thin` instead) and decides on per-cell
+   thresholds:
+   - environment per-cell > 1.5× max(interior, boundary) → `environment_coupled`
+   - boundary per-cell > 1.5× interior → `boundary_mediated`
+   - interior per-cell > 1.5× boundary → `interior_reservoir`
+   - candidate effect substantial but boundary ≈ interior → `whole_body_hidden_support`
+   - first-visible ≥ 5 AND hidden mass grows before visible → `delayed_hidden_channel`
+
+Outputs (under `outputs/m8b_<UTC>/`): `frozen_manifest.json`,
+`morphology_gates.csv`, `region_response_metrics.csv` (one row per
+candidate × region), `mechanism_labels.csv`, `candidate_summary.csv`,
+`condition_summary.csv`, `stats_summary.json`, 12 plots, `summary.md`
+with 7 canonical interpretation paragraphs:
+
+- *"M7 hidden support is genuinely boundary-mediated."* (boundary dominates)
+- *"M7 hidden support acts like latent internal state."* (interior dominates)
+- *"M7 candidates are strongly coupled to hidden state in their local environment."*
+- *"M7 hidden support is whole-body rather than region-specific."*
+- *"Current HCE is mainly a thin-body phenomenon; mechanism unresolved."*
+- *"HCE persists in thick morphologies."*
+- *"Insufficient thick candidates to disambiguate."* (when no thick candidates land)
+
+> **Status**: M8B code is implemented and the smoke test produces full
+> outputs (12 plots, 5 CSVs, frozen_manifest, summary.md). 30 new
+> tests pass; 282-test full suite has no regressions. **Empirical
+> disambiguation is pending** — the smoke at quick scale produced 0
+> thick candidates (rules and grids designed for HCE produce mostly
+> small structures). A real M8B requires either a longer/larger
+> `search_large_candidates` sweep or rule mutations targeted at
+> larger morphologies.
+
 ## Key findings
 
 | Question | Result |
