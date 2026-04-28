@@ -5,6 +5,15 @@ lower-dimensional projected structures with **functional signatures of
 observerhood** — persistent boundary, predictive memory, temporal asymmetry,
 intervention-sensitive causal structure, self-maintenance under perturbation.
 
+How this work differs:
+Lenia and Avida ask:
+
+Can artificial organisms emerge and evolve?
+
+Your project asks something sharper:
+
+Can lower-dimensional observer-like patterns be causally supported by hidden higher-dimensional state that is invisible in their projected world?
+
 > **This project does not claim to simulate consciousness.** It operationalizes
 > observer-likeness as a battery of measurable functional properties of
 > tracked persistent structures in a projected lower-dimensional world.
