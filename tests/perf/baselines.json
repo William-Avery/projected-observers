@@ -5,7 +5,8 @@
 
     "m8_quick_cuda_batched_seconds": 15.0,
     "m8_quick_cuda_batched_observed": 8.5,
-    "_m8_quick_note": "M8 --quick (3 rules per source x 2 seeds x T=80 x 32x32x4x4) on cuda-batched + n_workers=30. Empirically ~8.5s; gate at 15.0s absorbs numba JIT cold-start variance and joblib spawn overhead in fresh subprocess. A regression past 15s indicates a real perf issue.",
+    "m8_quick_min_candidates": 10,
+    "_m8_quick_note": "M8 --quick (3 rules per source x 2 seeds x T=80 x 32x32x4x4) on cuda-batched + n_workers=30. Empirically ~8.5s wall, ~20 candidates measured. Gate at 15.0s absorbs numba JIT cold-start variance and joblib spawn overhead. Candidate count gate at >=10 catches the silent-failure mode where every cell errors out (wall time alone passes when nothing actually runs).",
 
     "m7b_reference_seconds_target": 1800,
     "_m7b_reference_note": "Spec target: 5 rules per source x 50 test seeds x T=500 under 30 min. Not yet captured at this scale on cuda-batched. Long-form gate (--perf-long) holds the slot.",
