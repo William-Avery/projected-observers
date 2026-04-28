@@ -15,6 +15,21 @@ intervention-sensitive causal structure, self-maintenance under perturbation.
 > walkthrough — every CLI, in narrative order, with time budgets and
 > expected outputs.
 
+## At a glance
+
+![Hidden-Supported Projected Observers — conceptual summary of what is being compared, the core finding, what is and is not supported, and the current mechanism picture.](docs/images/conceptual_overview.png)
+
+In one sentence: **a lower-dimensional observer-like pattern can look
+the same right now, yet depend on hidden higher-dimensional structure
+for what happens next.** The figure summarizes the project's setup
+(4D → 2D projection), what was compared (generic observer score, HCE,
+HCE-guided evolution), the core finding (hidden 4D state can change
+the future without changing the present 2D appearance), what is and
+is not supported, and the current mechanism picture
+(boundary-and-interior co-mediated response, with a global-chaotic
+tail; M7 mostly strengthens HCE inside existing mechanism classes
+rather than producing a new one).
+
 ## Why each milestone exists
 
 Every milestone responds to a specific concern raised by the previous
