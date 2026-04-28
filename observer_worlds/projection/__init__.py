@@ -19,5 +19,9 @@ from .projection_suite import (
     ProjectionSuite,
     default_suite,
 )
+from .invisible_perturbations import make_projection_invisible_perturbation
 
-__all__ = ["ProjectionSpec", "ProjectionSuite", "default_suite"]
+__all__ = [
+    "ProjectionSpec", "ProjectionSuite", "default_suite",
+    "make_projection_invisible_perturbation",
+]

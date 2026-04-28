@@ -259,6 +259,9 @@ def _flatten_results(per_cell: list[dict]) -> tuple[list[dict], list[dict]]:
                     "track_id": cm.track_id,
                     "peak_frame": cm.peak_frame,
                     "lifetime": cm.lifetime,
+                    "valid": bool(cm.valid),
+                    "invalid_reason": cm.invalid_reason,
+                    "preservation_strategy": cm.preservation_strategy,
                     "HCE": cm.HCE,
                     "far_HCE": cm.far_HCE,
                     "sham_HCE": cm.sham_HCE,
@@ -267,6 +270,8 @@ def _flatten_results(per_cell: list[dict]) -> tuple[list[dict], list[dict]]:
                     "initial_projection_delta": cm.initial_projection_delta,
                     "far_initial_projection_delta":
                         cm.far_initial_projection_delta,
+                    "n_flipped_hidden": cm.n_flipped_hidden,
+                    "n_flipped_far": cm.n_flipped_far,
                 })
     return candidate_rows, cell_rows
 
@@ -376,23 +381,33 @@ def main(argv: list[str] | None = None) -> int:
     summary["n_candidate_rows"] = len(candidate_rows)
     summary["projections_evaluated"] = list(cfg["projections"])
 
-    # HCE by projection CSV (one row per projection × source).
+    # HCE by projection CSV (one row per projection).
     hce_rows = []
     for proj, agg in summary["per_projection"].items():
         hce_rows.append({
             "projection": proj,
-            "n_candidates": agg["n_candidates"],
+            "n_candidates_total": agg.get("n_candidates_total", 0),
+            "n_valid_hidden_invisible": agg.get("n_valid_hidden_invisible", 0),
+            "n_invalid_hidden_invisible":
+                agg.get("n_invalid_hidden_invisible", 0),
             "mean_HCE": agg.get("mean_HCE"),
             "mean_far_HCE": agg.get("mean_far_HCE"),
             "mean_hidden_vs_far_delta": agg.get("mean_hidden_vs_far_delta"),
             "mean_hidden_vs_sham_delta": agg.get("mean_hidden_vs_sham_delta"),
-            "mean_initial_projection_delta": agg.get("mean_initial_projection_delta"),
+            "mean_initial_projection_delta":
+                agg.get("mean_initial_projection_delta"),
+            "fraction_clean_initial_projection":
+                agg.get("fraction_clean_initial_projection"),
         })
     _write_simple_csv(hce_rows, out / "hce_by_projection.csv",
-                      fields=["projection", "n_candidates", "mean_HCE",
-                              "mean_far_HCE", "mean_hidden_vs_far_delta",
+                      fields=["projection", "n_candidates_total",
+                              "n_valid_hidden_invisible",
+                              "n_invalid_hidden_invisible",
+                              "mean_HCE", "mean_far_HCE",
+                              "mean_hidden_vs_far_delta",
                               "mean_hidden_vs_sham_delta",
-                              "mean_initial_projection_delta"])
+                              "mean_initial_projection_delta",
+                              "fraction_clean_initial_projection"])
 
     # Mechanism by projection — Stage-5+ placeholder; emit an empty CSV
     # with documented columns so downstream readers don't crash.
@@ -413,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
             "seed": row["seed"],
             "projection": proj,
             "n_candidates": row["n_candidates"],
+            "n_valid_hidden_invisible_in_projection":
+                agg.get("n_valid_hidden_invisible", 0),
+            "n_invalid_hidden_invisible_in_projection":
+                agg.get("n_invalid_hidden_invisible", 0),
+            "fraction_clean_initial_projection_in_projection":
+                agg.get("fraction_clean_initial_projection"),
             "projection_supports_threshold_margin":
                 row["projection_supports_threshold_margin"],
             "projection_output_kind": row["projection_output_kind"],
@@ -422,6 +443,9 @@ def main(argv: list[str] | None = None) -> int:
     _write_simple_csv(audit_rows, out / "projection_artifact_audit.csv",
                       fields=["rule_id", "rule_source", "seed", "projection",
                               "n_candidates",
+                              "n_valid_hidden_invisible_in_projection",
+                              "n_invalid_hidden_invisible_in_projection",
+                              "fraction_clean_initial_projection_in_projection",
                               "projection_supports_threshold_margin",
                               "projection_output_kind",
                               "mean_initial_projection_delta_for_projection"])

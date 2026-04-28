@@ -58,35 +58,49 @@ def aggregate_per_projection(
     """Compute per-projection summary stats from ``candidate_metrics.csv``
     rows.
 
-    Returns a dict shaped like::
-
-        {
-            "per_projection": {
-                "<projection>": {
-                    "n_candidates": int,
-                    "n_clean_initial_projection": int,
-                    "mean_HCE": float | None,
-                    ...
-                },
-            },
-            "metrics_recorded": [...],
-            "candidate_count_by_projection": {<projection>: int, ...},
-        }
+    Stage 2B: a candidate is **valid** iff its hidden-invisible
+    perturbation was accepted (``row["valid"] == True``). Mean HCE /
+    far / sham / delta are computed **only over valid candidates**.
+    Invalid candidates are counted, their invalid reasons are
+    aggregated, and ``mean_initial_projection_delta`` is reported over
+    valid candidates (where it should be ~0 by construction).
     """
+    def _truthy_valid(r):
+        v = r.get("valid")
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() == "true"
+        return False
+
     by_proj: dict[str, list[dict]] = defaultdict(list)
     for r in candidate_rows:
         by_proj[r["projection"]].append(r)
     per_projection: dict[str, dict] = {}
     for proj in projections:
         rs = by_proj.get(proj, [])
-        n = len(rs)
-        if n == 0:
+        n_total = len(rs)
+        valid_rows = [r for r in rs if _truthy_valid(r)]
+        n_valid = len(valid_rows)
+        n_invalid = n_total - n_valid
+
+        # Invalid-reason histogram.
+        reason_counts: dict[str, int] = {}
+        for r in rs:
+            if _truthy_valid(r):
+                continue
+            reason = r.get("invalid_reason") or "unknown"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+        if n_total == 0:
             per_projection[proj] = {
-                "n_candidates": 0,
+                "n_candidates_total": 0,
+                "n_valid_hidden_invisible": 0,
+                "n_invalid_hidden_invisible": 0,
+                "invalid_reason_counts": {},
                 "n_clean_initial_projection": 0,
                 "fraction_clean_initial_projection": None,
-                "mean_HCE": None,
-                "std_HCE": None,
+                "mean_HCE": None, "std_HCE": None,
                 "mean_far_HCE": None,
                 "mean_hidden_vs_far_delta": None,
                 "mean_hidden_vs_sham_delta": None,
@@ -96,39 +110,44 @@ def aggregate_per_projection(
             }
             continue
 
-        def col(k):
-            return [float(r[k]) for r in rs
+        def col(rows, k):
+            return [float(r[k]) for r in rows
                     if r.get(k) not in (None, "", "None")]
 
-        hce_values = col("HCE")
-        far_values = col("far_HCE")
-        delta_far = col("hidden_vs_far_delta")
-        delta_sham = col("hidden_vs_sham_delta")
-        init_delta = col("initial_projection_delta")
-        lifetimes = col("lifetime")
+        # Means computed only over valid candidates.
+        hce_values = col(valid_rows, "HCE")
+        far_values = col(valid_rows, "far_HCE")
+        delta_far = col(valid_rows, "hidden_vs_far_delta")
+        delta_sham = col(valid_rows, "hidden_vs_sham_delta")
+        init_delta_valid = col(valid_rows, "initial_projection_delta")
+        lifetimes = col(valid_rows, "lifetime")
 
-        n_clean = sum(1 for v in init_delta if v < 1e-6)
+        n_clean = sum(1 for v in init_delta_valid if v < 1e-6)
 
         per_projection[proj] = {
-            "n_candidates": n,
+            "n_candidates_total": n_total,
+            "n_valid_hidden_invisible": n_valid,
+            "n_invalid_hidden_invisible": n_invalid,
+            "invalid_reason_counts": reason_counts,
             "n_clean_initial_projection": n_clean,
             "fraction_clean_initial_projection":
-                (n_clean / n) if n else None,
+                (n_clean / n_valid) if n_valid else None,
             "mean_HCE": _safe_mean(hce_values),
             "std_HCE": _safe_std(hce_values),
             "mean_far_HCE": _safe_mean(far_values),
             "mean_hidden_vs_far_delta": _safe_mean(delta_far),
             "mean_hidden_vs_sham_delta": _safe_mean(delta_sham),
-            "mean_initial_projection_delta": _safe_mean(init_delta),
+            "mean_initial_projection_delta": _safe_mean(init_delta_valid),
             "mean_lifetime": _safe_mean(lifetimes),
-            "_status": "ok",
+            "_status": "ok" if n_valid > 0 else
+                       "all candidates invalid under this projection",
         }
     return {
         "stage": 2,
         "metrics_recorded": list(PROJECTION_METRICS),
         "per_projection": per_projection,
         "candidate_count_by_projection": {
-            p: per_projection[p]["n_candidates"] for p in projections
+            p: per_projection[p]["n_candidates_total"] for p in projections
         },
     }
 
@@ -178,22 +197,27 @@ def write_summary_md(summary: dict, path: Path) -> None:
                  "across projections is non-trivial).\n")
     lines.append("")
 
-    # Headline table
-    lines.append("## Per-projection summary")
+    # Headline table — gated on validity (Stage 2B)
+    lines.append("## Per-projection summary (HCE means over **valid** candidates only)")
     lines.append("")
     lines.append(_md_row([
-        "projection", "n", "mean HCE", "mean far_HCE",
-        "mean (HCE - far)", "mean init_proj_delta",
+        "projection", "n_total", "n_valid", "n_invalid",
+        "mean HCE (valid)", "mean far_HCE (valid)",
+        "mean (HCE − far)", "mean init_delta (valid)",
         "frac_clean_init",
     ]))
-    lines.append(_md_row(["---"] + ["---:"] * 6))
+    lines.append(_md_row(["---"] + ["---:"] * 8))
     for proj, agg in summary["per_projection"].items():
-        if agg["n_candidates"] == 0:
-            lines.append(_md_row([proj, "0", "—", "—", "—", "—", "—"]))
+        n_total = agg.get("n_candidates_total", 0)
+        if n_total == 0:
+            lines.append(_md_row([proj, "0", "0", "0",
+                                   "—", "—", "—", "—", "—"]))
             continue
         cells = [
             proj,
-            str(agg["n_candidates"]),
+            str(n_total),
+            str(agg["n_valid_hidden_invisible"]),
+            str(agg["n_invalid_hidden_invisible"]),
             f"{agg['mean_HCE']:+.4f}" if agg["mean_HCE"] is not None else "—",
             f"{agg['mean_far_HCE']:+.4f}" if agg["mean_far_HCE"] is not None else "—",
             f"{agg['mean_hidden_vs_far_delta']:+.4f}"
@@ -205,6 +229,28 @@ def write_summary_md(summary: dict, path: Path) -> None:
         ]
         lines.append(_md_row(cells))
     lines.append("")
+
+    # Invalid reasons.
+    any_invalid = any(
+        agg["n_invalid_hidden_invisible"] > 0
+        for agg in summary["per_projection"].values()
+    )
+    if any_invalid:
+        lines.append("## Invalid hidden-invisible perturbations by projection")
+        lines.append("")
+        lines.append(_md_row(["projection", "n_invalid", "reasons"]))
+        lines.append(_md_row(["---", "---:", "---"]))
+        for proj, agg in summary["per_projection"].items():
+            n_inv = agg.get("n_invalid_hidden_invisible", 0)
+            if n_inv == 0:
+                continue
+            reasons = agg.get("invalid_reason_counts", {})
+            reason_str = "; ".join(
+                f"{k} ({v})" for k, v in sorted(reasons.items(),
+                                                key=lambda x: -x[1])
+            ) or "—"
+            lines.append(_md_row([proj, str(n_inv), reason_str]))
+        lines.append("")
 
     # Caveats per projection.
     lines.append("## Per-projection caveats")

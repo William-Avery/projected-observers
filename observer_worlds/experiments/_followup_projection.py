@@ -41,7 +41,10 @@ import numpy as np
 
 from observer_worlds.detection import GreedyTracker
 from observer_worlds.detection.components import extract_components
-from observer_worlds.projection import ProjectionSpec, ProjectionSuite, default_suite
+from observer_worlds.projection import (
+    ProjectionSpec, ProjectionSuite, default_suite,
+    make_projection_invisible_perturbation,
+)
 from observer_worlds.utils import seeded_rng
 from observer_worlds.utils.config import DetectionConfig
 from observer_worlds.worlds import CA4D
@@ -192,34 +195,6 @@ def detect_candidates(
 # ---------------------------------------------------------------------------
 
 
-def _flip_random_hidden_cells(
-    state_4d: np.ndarray, *, mask_2d: np.ndarray,
-    n_flips: int, rng: np.random.Generator,
-) -> np.ndarray:
-    """Return a copy of ``state_4d`` with up to ``n_flips`` cells flipped
-    inside the (z, w) hyperplane at locations whose 2D mask is True.
-
-    Used both for the candidate-local perturbation (mask_2d = candidate
-    bbox) and for the far perturbation (mask_2d = ~candidate bbox).
-    """
-    perturbed = state_4d.copy()
-    Nx, Ny, Nz, Nw = state_4d.shape
-    if not mask_2d.any():
-        return perturbed
-    valid_xy = np.argwhere(mask_2d)
-    if valid_xy.size == 0:
-        return perturbed
-    n = min(int(n_flips), valid_xy.shape[0] * Nz * Nw)
-    pick = rng.integers(0, valid_xy.shape[0], size=n)
-    zs = rng.integers(0, Nz, size=n)
-    ws = rng.integers(0, Nw, size=n)
-    for i in range(n):
-        x, y = valid_xy[pick[i]]
-        z, w = int(zs[i]), int(ws[i])
-        perturbed[x, y, z, w] ^= 1
-    return perturbed
-
-
 def _project(suite: ProjectionSuite, name: str, state_4d: np.ndarray) -> np.ndarray:
     return suite.project(name, state_4d)
 
@@ -269,18 +244,29 @@ def _rollout_perturbed(
 
 @dataclass
 class CandidateMetrics:
-    """Per-candidate result for one projection."""
+    """Per-candidate result for one projection.
+
+    Stage 2B: ``valid`` is True iff the projection-specific
+    hidden-invisible perturbation succeeded for this candidate. When
+    invalid, the HCE / far_HCE / sham_HCE / delta fields are ``None``
+    and downstream aggregation ignores them.
+    """
     candidate_id: int
     track_id: int
     peak_frame: int
     lifetime: int
-    HCE: float                          # mean over horizons of local divergence under hidden perturbation
-    far_HCE: float
-    sham_HCE: float                     # always 0.0 by construction; preserved for surface symmetry
-    hidden_vs_far_delta: float          # HCE - far_HCE
-    hidden_vs_sham_delta: float         # HCE - sham_HCE
-    initial_projection_delta: float     # |P(perturbed) - P(unperturbed)| at t = peak_frame
+    valid: bool
+    invalid_reason: str | None
+    preservation_strategy: str
+    HCE: float | None
+    far_HCE: float | None
+    sham_HCE: float | None
+    hidden_vs_far_delta: float | None
+    hidden_vs_sham_delta: float | None
+    initial_projection_delta: float
     far_initial_projection_delta: float
+    n_flipped_hidden: int = 0
+    n_flipped_far: int = 0
 
 
 def measure_candidate_under_projection(
@@ -292,9 +278,20 @@ def measure_candidate_under_projection(
     hce_replicates: int,
     backend: str,
     rng: np.random.Generator,
-    n_flips_hidden: int = 8,
+    target_flip_fraction: float = 0.1,
+    max_invisibility_attempts: int = 100,
 ) -> CandidateMetrics:
-    """Compute HCE / far_HCE / sham_HCE for one candidate under one projection."""
+    """Compute HCE / far_HCE / sham_HCE for one candidate under one
+    projection.
+
+    Stage 2B: the perturbation generator is projection-aware
+    (:func:`make_projection_invisible_perturbation`). If the
+    hidden-invisible perturbation cannot be produced (e.g. all-zero
+    fibres for ``max_projection``, or verification exhausted for
+    ``random_linear_projection``), the candidate is marked invalid
+    with a reason; HCE numbers are not reported and the aggregator
+    excludes it.
+    """
     Nx, Ny = state_stream_4d.shape[1:3]
     spec = suite.get(projection_name)
 
@@ -302,66 +299,91 @@ def measure_candidate_under_projection(
     bbox_mask = _bbox_mask(candidate.peak_bbox, (Nx, Ny))
     far_mask = _far_mask(candidate.peak_bbox, (Nx, Ny))
 
-    # The candidate-local mask: actual interior; that is the region where
-    # divergence is measured.
     local_mask = candidate.peak_interior.astype(bool)
     if not local_mask.any():
         local_mask = candidate.peak_mask.astype(bool)
 
     proj_unperturbed_at_peak = _project(suite, projection_name, state_at_peak)
 
-    # Run unperturbed forwards from peak for each horizon (max horizon
-    # determines the longest rollout). We can reuse the global state
-    # stream when peak_frame + horizon <= len(stream)-1.
-    max_horizon = max(int(h) for h in horizons)
-    avail_steps = state_stream_4d.shape[0] - 1 - candidate.peak_frame
+    # 1. Build the hidden-invisible perturbation.
+    s_hidden, hidden_report = make_projection_invisible_perturbation(
+        state_at_peak, candidate_mask=bbox_mask,
+        projection_name=projection_name,
+        rng=rng,
+        max_attempts=max_invisibility_attempts,
+        target_flip_fraction=target_flip_fraction,
+    )
+    init_delta = float(hidden_report["initial_projection_delta"])
 
-    # Future divergence accumulators per condition.
+    # 2. Build the far-region perturbation as a control. We don't gate
+    # on its acceptance — the far control's role is to compare effect
+    # *magnitude*, not to claim invisibility. But we record its delta
+    # so the audit can see whether the far region also has a clean
+    # null perturbation under this projection.
+    s_far, far_report = make_projection_invisible_perturbation(
+        state_at_peak, candidate_mask=far_mask,
+        projection_name=projection_name,
+        rng=rng,
+        max_attempts=max_invisibility_attempts,
+        target_flip_fraction=target_flip_fraction,
+    )
+    far_init_delta = float(far_report["initial_projection_delta"])
+
+    # 3. If the hidden perturbation is invalid, return early with a
+    # diagnostic record. The runner / aggregator will exclude this
+    # candidate from HCE means.
+    if not hidden_report["accepted"]:
+        return CandidateMetrics(
+            candidate_id=candidate.candidate_id,
+            track_id=candidate.track_id,
+            peak_frame=candidate.peak_frame,
+            lifetime=candidate.lifetime,
+            valid=False,
+            invalid_reason=str(hidden_report.get("invalid_reason")),
+            preservation_strategy=str(hidden_report["preservation_strategy"]),
+            HCE=None, far_HCE=None, sham_HCE=None,
+            hidden_vs_far_delta=None, hidden_vs_sham_delta=None,
+            initial_projection_delta=init_delta,
+            far_initial_projection_delta=far_init_delta,
+            n_flipped_hidden=int(hidden_report.get("n_flipped", 0)),
+            n_flipped_far=int(far_report.get("n_flipped", 0)),
+        )
+
+    # 4. Run perturbed rollouts at each horizon and accumulate
+    # candidate-local divergence. Replicates re-randomise the
+    # perturbation; the (hidden, far) pair on each replicate is paired.
     hce_horizon_means: list[float] = []
     far_horizon_means: list[float] = []
     sham_horizon_means: list[float] = []
-    init_deltas: list[float] = []
-    far_init_deltas: list[float] = []
 
-    for _ in range(int(hce_replicates)):
-        # 4a. Hidden perturbation INSIDE candidate bbox.
-        s_hidden = _flip_random_hidden_cells(
-            state_at_peak, mask_2d=bbox_mask,
-            n_flips=n_flips_hidden, rng=rng,
-        )
-        proj_hidden_at_peak = _project(suite, projection_name, s_hidden)
-        init_deltas.append(_l1_global(
-            proj_hidden_at_peak, proj_unperturbed_at_peak,
-        ))
+    avail_steps = state_stream_4d.shape[0] - 1 - candidate.peak_frame
 
-        # 4b. Far perturbation OUTSIDE candidate bbox.
-        s_far = _flip_random_hidden_cells(
-            state_at_peak, mask_2d=far_mask,
-            n_flips=n_flips_hidden, rng=rng,
-        )
-        proj_far_at_peak = _project(suite, projection_name, s_far)
-        far_init_deltas.append(_l1_global(
-            proj_far_at_peak, proj_unperturbed_at_peak,
-        ))
-
-        # Roll forward and project at each horizon, computing local
-        # divergence for hidden / far / sham (sham == 0 by construction
-        # since identity-perturbation produces identical futures).
+    # We re-roll perturbations for each replicate after the first.
+    s_hidden_r, s_far_r = s_hidden, s_far
+    for r in range(int(hce_replicates)):
+        if r > 0:
+            s_hidden_r, _ = make_projection_invisible_perturbation(
+                state_at_peak, candidate_mask=bbox_mask,
+                projection_name=projection_name, rng=rng,
+                max_attempts=max_invisibility_attempts,
+                target_flip_fraction=target_flip_fraction,
+            )
+            s_far_r, _ = make_projection_invisible_perturbation(
+                state_at_peak, candidate_mask=far_mask,
+                projection_name=projection_name, rng=rng,
+                max_attempts=max_invisibility_attempts,
+                target_flip_fraction=target_flip_fraction,
+            )
         for h in horizons:
             h = int(h)
             if h > avail_steps:
-                # Run extra steps just for this horizon.
-                # (Smoke run rarely hits this; skip if uneconomical.)
                 continue
-            # Unperturbed future at horizon h.
             future_unperturbed = state_stream_4d[candidate.peak_frame + h]
-            # Hidden-perturbed future at horizon h.
             future_hidden = _rollout_perturbed(
-                rule_bs, s_hidden, h, backend=backend,
+                rule_bs, s_hidden_r, h, backend=backend,
             )
-            # Far-perturbed future at horizon h.
             future_far = _rollout_perturbed(
-                rule_bs, s_far, h, backend=backend,
+                rule_bs, s_far_r, h, backend=backend,
             )
             proj_unperturbed = _project(suite, projection_name, future_unperturbed)
             proj_hidden_future = _project(suite, projection_name, future_hidden)
@@ -373,8 +395,6 @@ def measure_candidate_under_projection(
             far_horizon_means.append(
                 _l1_local(proj_far_future, proj_unperturbed, local_mask),
             )
-            # Sham == identity perturbation; future is identical to
-            # unperturbed; divergence is zero by construction.
             sham_horizon_means.append(0.0)
 
     hce = float(np.mean(hce_horizon_means)) if hce_horizon_means else 0.0
@@ -385,14 +405,18 @@ def measure_candidate_under_projection(
         track_id=candidate.track_id,
         peak_frame=candidate.peak_frame,
         lifetime=candidate.lifetime,
+        valid=True,
+        invalid_reason=None,
+        preservation_strategy=str(hidden_report["preservation_strategy"]),
         HCE=hce,
         far_HCE=far_hce,
         sham_HCE=sham_hce,
         hidden_vs_far_delta=hce - far_hce,
         hidden_vs_sham_delta=hce - sham_hce,
-        initial_projection_delta=float(np.mean(init_deltas)) if init_deltas else 0.0,
-        far_initial_projection_delta=float(np.mean(far_init_deltas))
-            if far_init_deltas else 0.0,
+        initial_projection_delta=init_delta,
+        far_initial_projection_delta=far_init_delta,
+        n_flipped_hidden=int(hidden_report.get("n_flipped", 0)),
+        n_flipped_far=int(far_report.get("n_flipped", 0)),
     )
 
 

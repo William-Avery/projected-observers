@@ -100,38 +100,70 @@ def test_metric_inventory_is_importable():
     assert "mean_initial_projection_delta" in PROJECTION_METRICS
     template = project_metrics_template(["mean_threshold"])
     assert template["mean_threshold"]["mean_HCE"] is None
-    # Stage-1-shape dict still works through the compat shim.
     s = summarize(template)
     assert s["stage"] in (1, 2)
     # Empty aggregation path doesn't crash.
     agg = aggregate_per_projection([], ["mean_threshold"])
-    assert agg["per_projection"]["mean_threshold"]["n_candidates"] == 0
+    proj = agg["per_projection"]["mean_threshold"]
+    assert proj["n_candidates_total"] == 0
+    assert proj["n_valid_hidden_invisible"] == 0
+    assert proj["n_invalid_hidden_invisible"] == 0
 
 
-def test_aggregate_with_real_rows():
+def test_aggregate_with_real_rows_only_valid_in_means():
+    """Stage 2B: HCE means are taken only over candidates whose
+    hidden-invisible perturbation was accepted. Invalid candidates are
+    counted but excluded from the means."""
     from observer_worlds.analysis.projection_robustness_stats import (
         aggregate_per_projection,
     )
+    base = {
+        "projection": "max_projection", "rule_id": "r", "rule_source": "s",
+        "seed": 6000, "peak_frame": 5,
+        "projection_supports_threshold_margin": False,
+        "projection_output_kind": "binary",
+    }
     rows = [
-        {"projection": "mean_threshold", "candidate_id": 0, "track_id": 1,
+        # valid candidate
+        {**base, "candidate_id": 0, "track_id": 1,
+         "valid": True, "invalid_reason": None,
+         "preservation_strategy": "count_preserving_swap",
          "HCE": 0.02, "far_HCE": 0.005, "sham_HCE": 0.0,
          "hidden_vs_far_delta": 0.015, "hidden_vs_sham_delta": 0.02,
-         "initial_projection_delta": 0.0, "lifetime": 30,
-         "rule_id": "r", "rule_source": "s", "seed": 6000,
-         "peak_frame": 5, "far_initial_projection_delta": 0.0,
-         "projection_supports_threshold_margin": True,
-         "projection_output_kind": "binary"},
-        {"projection": "mean_threshold", "candidate_id": 1, "track_id": 2,
+         "initial_projection_delta": 0.0,
+         "far_initial_projection_delta": 0.0,
+         "lifetime": 30, "n_flipped_hidden": 8, "n_flipped_far": 8},
+        # second valid candidate
+        {**base, "candidate_id": 1, "track_id": 2,
+         "valid": True, "invalid_reason": None,
+         "preservation_strategy": "count_preserving_swap",
          "HCE": 0.03, "far_HCE": 0.01, "sham_HCE": 0.0,
          "hidden_vs_far_delta": 0.02, "hidden_vs_sham_delta": 0.03,
-         "initial_projection_delta": 0.0, "lifetime": 25,
-         "rule_id": "r", "rule_source": "s", "seed": 6000,
-         "peak_frame": 4, "far_initial_projection_delta": 0.0,
-         "projection_supports_threshold_margin": True,
-         "projection_output_kind": "binary"},
+         "initial_projection_delta": 0.0,
+         "far_initial_projection_delta": 0.0,
+         "lifetime": 25, "n_flipped_hidden": 8, "n_flipped_far": 8},
+        # invalid candidate (all-zero fibre); excluded from HCE means
+        {**base, "candidate_id": 2, "track_id": 3,
+         "valid": False,
+         "invalid_reason":
+             "no fibre in candidate mask had both ON and OFF cells",
+         "preservation_strategy": "count_preserving_swap",
+         "HCE": None, "far_HCE": None, "sham_HCE": None,
+         "hidden_vs_far_delta": None, "hidden_vs_sham_delta": None,
+         "initial_projection_delta": 0.0,
+         "far_initial_projection_delta": 0.0,
+         "lifetime": 20, "n_flipped_hidden": 0, "n_flipped_far": 0},
     ]
-    agg = aggregate_per_projection(rows, ["mean_threshold"])
-    proj = agg["per_projection"]["mean_threshold"]
-    assert proj["n_candidates"] == 2
+    agg = aggregate_per_projection(rows, ["max_projection"])
+    proj = agg["per_projection"]["max_projection"]
+    assert proj["n_candidates_total"] == 3
+    assert proj["n_valid_hidden_invisible"] == 2
+    assert proj["n_invalid_hidden_invisible"] == 1
+    # Means computed only over the 2 valid candidates.
     assert abs(proj["mean_HCE"] - 0.025) < 1e-9
+    # Invalid reason captured.
+    reason_keys = list(proj["invalid_reason_counts"])
+    assert len(reason_keys) == 1
+    assert "no fibre" in reason_keys[0]
+    # Clean-initial-projection fraction is over valid candidates only.
     assert proj["fraction_clean_initial_projection"] == 1.0
