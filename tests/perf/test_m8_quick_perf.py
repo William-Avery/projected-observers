@@ -46,11 +46,17 @@ def test_m8_quick_under_gate_cuda_batched(tmp_path: Path):
     baselines = json.loads(
         (REPO / "tests" / "perf" / "baselines.json").read_text(encoding="utf-8")
     )
-    gate = float(baselines["m8_quick_cuda_batched_seconds"])
-    min_candidates = int(baselines.get("m8_quick_min_candidates", 1))
+    fast_gate = baselines["fast_perf_gates"]["m8_quick_cuda_batched"]
+    gate = float(fast_gate["wall_time_seconds_max"])
+    min_candidates = int(fast_gate["min_candidates"])
 
     rules_dir = REPO / "release" / "rules"
     label = "perf_gate_m8_quick"
+    # Pin n_workers to a small value for the gate. The default
+    # (cpu_count - 2) is 30 on the captured machine, and 30 worker
+    # processes each instantiating their own cupy context on a single
+    # 12 GB GPU triggers Windows "access violation" crashes. The
+    # smoke runs only 6 cells, so 4 workers is plenty.
     cmd = [
         sys.executable, "-m",
         "observer_worlds.experiments.run_m8_mechanism_discovery",
@@ -59,6 +65,7 @@ def test_m8_quick_under_gate_cuda_batched(tmp_path: Path):
         "--m4a-rules", str(rules_dir / "m4a_search_leaderboard.json"),
         "--quick",
         "--backend", "cuda-batched",
+        "--n-workers", "4",
         "--label", label,
         "--out-root", str(tmp_path),
     ]
@@ -123,15 +130,5 @@ def test_m8_quick_under_gate_cuda_batched(tmp_path: Path):
     )
 
 
-@pytest.mark.perf_long
-@pytest.mark.skipif(not _cuda_available(), reason="cuda required")
-def test_m7b_reference_under_30min_placeholder(tmp_path: Path):
-    """Long-form M7B reference gate: production config under 30 min.
-
-    Currently a placeholder. To enable: run the M7B reference config
-    (5 rules per source x 50 test seeds x T=500 x 32x32x4x4) on the
-    14900k + 3080 Ti, record the wall time as
-    ``m7b_reference_seconds_observed`` in baselines.json, then replace
-    this skip with the actual gate.
-    """
-    pytest.skip("M7B reference baseline not yet captured at production scale")
+# The long-form M7B-class production gate lives in test_m7b_reference.py;
+# this file holds only the fast automatic gate.

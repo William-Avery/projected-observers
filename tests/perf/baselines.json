@@ -1,17 +1,78 @@
 {
-    "machine": "14900k + 3080 Ti, Windows 11, Python 3.12, cupy 14.0.1",
-    "captured_at": "2026-04-26",
-    "notes": "Smoke baseline measured during refactor. Production-scale baselines (M7B reference, rule-search throughput) need re-capture once a long-form measurement run is performed; placeholders below are intentionally conservative.",
+    "schema_version": 1,
+    "_doc": "Performance baselines and gates for projected-observers. See docs/TEST_PERFORMANCE.md for the full policy. Two layers: fast_perf_gates run in normal pytest; production_baselines are opt-in (--perf-long) and require explicit capture runs (tests/perf/capture_m7b_baseline.py).",
 
-    "m8_quick_cuda_batched_seconds": 15.0,
-    "m8_quick_cuda_batched_observed": 8.5,
-    "m8_quick_min_candidates": 10,
-    "_m8_quick_note": "M8 --quick (3 rules per source x 2 seeds x T=80 x 32x32x4x4) on cuda-batched + n_workers=30. Empirically ~8.5s wall, ~20 candidates measured. Gate at 15.0s absorbs numba JIT cold-start variance and joblib spawn overhead. Candidate count gate at >=10 catches the silent-failure mode where every cell errors out (wall time alone passes when nothing actually runs).",
+    "fast_perf_gates": {
+        "m8_quick_cuda_batched": {
+            "_description": "Default automatic gate. Runs in normal pytest invocations. Catches obvious regressions in CA stepping, batched response-map dispatch, summary writers, joblib worker init, and the CLI plumbing for --backend cuda-batched.",
+            "config": "M8 --quick --backend cuda-batched (3 rules per source x 2 seeds x T=80 x 16x16x4x4)",
+            "wall_time_seconds_max": 15.0,
+            "wall_time_seconds_observed": 8.5,
+            "min_candidates": 10,
+            "_observed_note": "Empirically ~8.5s on the captured machine; gate at 15.0s absorbs numba JIT cold-start variance and joblib spawn overhead in fresh subprocess. min_candidates=10 catches the silent-failure mode where every cell errors out (wall time alone passes when nothing actually runs)."
+        }
+    },
 
-    "m7b_reference_seconds_target": 1800,
-    "_m7b_reference_note": "Spec target: 5 rules per source x 50 test seeds x T=500 under 30 min. Not yet captured at this scale on cuda-batched. Long-form gate (--perf-long) holds the slot.",
+    "production_baselines": {
+        "m8_m7b_class_numpy": {
+            "_description": "M8 mechanism discovery at M7B-class production scale on the slow numpy backend. The reference point for measuring cuda-batched speedup on the same config. Captured opportunistically during the perf refactor; not run in normal pytest.",
+            "captured_at_utc": "2026-04-27T21:49:03Z",
+            "git_commit": "251aeba9ad940cc53994faf84cbb18ece2e25266",
+            "git_commit_tag": "perf-refactor-v1",
+            "git_dirty": false,
+            "machine": {
+                "cpu": "Intel(R) Core(TM) i9-14900K",
+                "cpu_logical_threads": 32,
+                "ram_bytes": 68459454464,
+                "ram_gib_approx": 63.8,
+                "gpu": "NVIDIA GeForce RTX 3080 Ti",
+                "vram_mib": 12288,
+                "nvidia_driver": "595.79",
+                "os": "Windows-11-10.0.26200-SP0",
+                "python": "3.12.10",
+                "numpy": "2.4.4",
+                "scipy": "1.17.1",
+                "numba": "0.65.1",
+                "cupy": "14.0.1",
+                "cuda_runtime_version": 12090
+            },
+            "command": "python -m observer_worlds.experiments.run_m8_mechanism_discovery --m7-rules release/rules/m7_top_hce_rules.json",
+            "config": {
+                "n_rules_per_source": 5,
+                "n_test_seeds": 20,
+                "test_seeds_range": "6000..6019",
+                "grid": [64, 64, 8, 8],
+                "timesteps": 500,
+                "max_candidates": 20,
+                "hce_replicates": 3,
+                "horizons": [1, 2, 3, 5, 10, 20, 40, 80],
+                "backend": "numpy",
+                "n_workers": 30
+            },
+            "results": {
+                "wall_time_seconds_sweep": 1843,
+                "wall_time_seconds_total_approx": 1875,
+                "n_sweep_cells": 100,
+                "candidates_measured": 1387,
+                "summary_md_path": "outputs/m8_20260427T214903Z/summary.md"
+            },
+            "_post_sweep_note": "Original run's summary.md write failed mid-stream on a UnicodeEncodeError (cp1252 cannot encode U+2192 right-arrow). Recovered manually via the encoding=utf-8 fix in commit cbc0a79. CSVs, stats JSON, and plots all wrote correctly during the original run; only summary.md was empty before recovery."
+        },
+        "m8_m7b_class_cuda_batched": null
+    },
 
-    "rule_search_sims_per_sec_baseline_numba": null,
-    "rule_search_sims_per_sec_target_cuda": null,
-    "_rule_search_note": "Spec target: cuda-batched fitness throughput >= 20x numba baseline. The CA4DBatch primitive is in place but evaluate_rule_m7 was not migrated in Stage 3 (deferred). Gate cannot fire until that migration lands."
+    "tolerance_policy": {
+        "warn_regression_fraction": 0.20,
+        "_description": "When a re-run is checked against a captured baseline: if its wall_time_seconds exceeds the baseline by more than warn_regression_fraction (20%), the test emits a warning. With --perf-gate, that warning becomes a hard assertion failure.",
+        "fail_only_in_gate_mode": true
+    },
+
+    "rerun_commands": {
+        "_doc": "Run from the repository root with the .venv activated.",
+        "fast_gate": "pytest tests/perf/test_m8_quick_perf.py -v",
+        "production_baseline_check": "pytest tests/perf/test_m7b_reference.py --perf-long",
+        "production_baseline_strict_gate": "pytest tests/perf/test_m7b_reference.py --perf-long --perf-gate",
+        "production_baseline_recapture_numpy": "python tests/perf/capture_m7b_baseline.py --backend numpy --variant m8_m7b_class_numpy --update-baseline",
+        "production_baseline_capture_cuda_batched": "python tests/perf/capture_m7b_baseline.py --backend cuda-batched --variant m8_m7b_class_cuda_batched --update-baseline"
+    }
 }
