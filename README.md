@@ -652,6 +652,46 @@ and `summary.md` with six canonical interpretation paragraphs:
 > compute (the multi-distance probes + background sampling +
 > stabilization variants are the dominant cost).
 
+## Key figures
+
+The M8E cross-source run, plus its post-hoc M8F (within-class
+bootstrap) and M8G (revised classifier) analyses, generate ~16 plots
+under `outputs/m8e_cross_source_<timestamp>/plots/`. Outputs are
+gitignored; the analysis modules regenerate them. Full inventory with
+per-figure caveats and "which plot for which claim" mapping:
+[`docs/M8_plot_inventory.md`](docs/M8_plot_inventory.md).
+
+The figures most worth citing in a report:
+
+- **`m8f_within_class_hce_ci.png`** — mean within-class HCE per source
+  with 95 % grouped-bootstrap CI bars. Shows the M7 advantage in
+  `global_chaotic` is CI-clean against both baselines and that M7 vs
+  M4A in `boundary_mediated` visibly overlaps. *Primary evidence.*
+- **`m8f_within_class_effect_sizes.png`** — M7-minus-baseline HCE
+  differences with CI bars; the lower whisker of the M7 vs M4A
+  `boundary_mediated` bar just touches zero, making the borderline
+  result honest. *Primary evidence.*
+- **`m8g_hce_by_revised_mechanism.png`** — mean per-candidate HCE per
+  revised M8G class and source. Cleanest single-figure summary of the
+  M7 within-class amplification story. *Primary evidence.*
+- **`boundary_vs_interior_response_by_source.png`** — `boundary_response`
+  ≈ `interior_response` ≈ 0.9 + in every source. Direct visual support
+  for the M8 classifier audit's "boundary-organized, not boundary-
+  localized" reading. *Primary evidence.*
+- **`mechanism_class_distribution.png`** — old-classifier mechanism
+  fractions per source, side-by-side. Shows the cross-source
+  distribution is statistically indistinguishable. *Primary evidence
+  for "no mechanism-frequency shift."*
+
+Plots flagged in the inventory as **not** suitable as primary visual
+evidence (they are correct but don't carry the narrative on their
+own): `m8g_revised_mechanism_distribution.png` (the relabelling is
+invisible at the high level), `hce_vs_lifetime_tradeoff.png` and
+`hidden_volatility_vs_lifetime.png` (M4C is overplotted by other
+sources), `hce_vs_boundary_response_fraction.png` (the highest
+per-candidate HCE peaks belong to M4A, not M7 — M7 wins in mean, not
+in extreme tails).
+
 ## Key findings
 
 | Question | Result |
