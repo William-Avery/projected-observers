@@ -427,6 +427,7 @@ def run_tasks_for_candidate(
     task_score_hidden_perturbed`` per (trial, horizon)."""
     from observer_worlds.projection import (
         make_projection_invisible_perturbation,
+        make_projection_visible_perturbation,
     )
 
     hce = _estimate_hce(
@@ -455,6 +456,26 @@ def run_tasks_for_candidate(
         if not perturbation_report.get("accepted"):
             perturbed_state = None  # cannot measure delta cleanly
 
+    # Build a visible-perturbed start state.
+    visible_state = None
+    visible_report = None
+    if measure_hidden_intervention_delta:
+        # Reuse the same flag — visible delta is the natural symmetric
+        # counterpart and is cheap given we already pay rollout costs.
+        visible_state, visible_report = (
+            make_projection_visible_perturbation(
+                cic.state_at_peak,
+                candidate_mask=cic.cand.peak_mask,
+                projection_name=projection_name,
+                rng=rng,
+                target_visible_fraction=0.1,
+                min_projection_delta=1e-3,
+                max_attempts=20,
+            )
+        )
+        if not visible_report.get("valid"):
+            visible_state = None
+
     def _call(task, evaluator, override=None):
         if task == "memory":
             return evaluator(
@@ -474,11 +495,14 @@ def run_tasks_for_candidate(
         if evaluator is None:
             continue
         original_trials = _call(task, evaluator, override=None)
-        # Compute hidden-intervention deltas for tasks where the
-        # measurement is meaningful (skip foraging at smoke quality).
+        # Hidden-intervention deltas (Stage 5A) and visible-intervention
+        # deltas (Stage 5B), both for repair and memory.
         perturbed_trials = None
         if perturbed_state is not None and task in ("repair", "memory"):
             perturbed_trials = _call(task, evaluator, override=perturbed_state)
+        visible_trials = None
+        if visible_state is not None and task in ("repair", "memory"):
+            visible_trials = _call(task, evaluator, override=visible_state)
 
         for idx, t in enumerate(original_trials):
             t.hce = hce
@@ -489,6 +513,13 @@ def run_tasks_for_candidate(
                         and pt.task_score is not None):
                     t.hidden_intervention_task_delta = (
                         float(t.task_score) - float(pt.task_score)
+                    )
+            if visible_trials is not None and idx < len(visible_trials):
+                vt = visible_trials[idx]
+                if (t.task_score is not None
+                        and vt.task_score is not None):
+                    t.visible_intervention_task_delta = (
+                        float(t.task_score) - float(vt.task_score)
                     )
             out.append(t)
     return out

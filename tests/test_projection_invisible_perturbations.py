@@ -129,45 +129,96 @@ def test_mean_threshold_preserves_thresholded_value_per_column():
 # ---------------------------------------------------------------------------
 
 
-def test_random_linear_with_no_valid_perturbation_reports_failure():
-    """A continuous projection cannot generally be preserved by random
-    bit flips; verification should exhaust attempts and report
-    failure with the best-delta available."""
+def test_random_linear_uses_weight_canceling_strategy():
+    """Stage 5B: random_linear now uses weight-canceling pair swaps
+    rather than random-flip rejection sampling."""
     rng = np.random.default_rng(0)
     X = _state(seed=21)
     cm = _full_mask(X.shape[:2])
     perturbed, report = make_projection_invisible_perturbation(
         X, candidate_mask=cm, projection_name="random_linear_projection",
-        rng=rng, max_attempts=5, target_flip_fraction=0.25,
-        verification_tolerance=1e-9,  # impossibly strict
+        rng=rng, target_flip_fraction=0.25,
+        verification_tolerance=1e-3,  # realistic for continuous output
     )
-    # With strict tolerance and continuous output, no attempt should
-    # produce exactly zero delta.
+    assert report["preservation_strategy"] == "weight_canceling_pair_swap"
+    if report["accepted"]:
+        # Projection must be within declared tolerance.
+        assert report["initial_projection_delta"] <= 1e-3
+        # Some bits actually flipped.
+        assert report["n_flipped"] > 0
+
+
+def test_random_linear_strict_tolerance_rejects_with_clear_reason():
+    """At a strict 1e-12 tolerance, no random-floating-point pair-swap
+    accumulation will land exactly there. The algorithm picks the
+    smallest pairs greedily, then verifies the full-grid delta. If the
+    delta exceeds tolerance, the invalid_reason cites the produced
+    delta vs the tolerance."""
+    rng = np.random.default_rng(0)
+    X = _state(seed=21)
+    cm = _full_mask(X.shape[:2])
+    perturbed, report = make_projection_invisible_perturbation(
+        X, candidate_mask=cm, projection_name="random_linear_projection",
+        rng=rng, target_flip_fraction=0.25,
+        verification_tolerance=1e-12,
+    )
+    assert report["preservation_strategy"] == "weight_canceling_pair_swap"
     assert report["accepted"] is False
-    assert report["preservation_strategy"] == "verification"
-    assert "verification failed" in (report["invalid_reason"] or "")
-    assert report["attempts_used"] >= 1
+    reason = report["invalid_reason"] or ""
+    # Either no pair was found (rare with sparse fibres) or the
+    # accumulated full-grid delta exceeded the strict tolerance.
+    assert ("no_weight_canceling_pair" in reason
+            or "produced full-grid delta" in reason), reason
 
 
-def test_multi_channel_verification_can_reject_when_channels_differ():
+def test_multi_channel_uses_signature_strategy_and_preserves_exactly():
+    """Stage 5B: multi_channel uses signature-grouped pair swaps. When
+    accepted, the projection is preserved EXACTLY (not within
+    tolerance) because swaps happen within identical-signature cells."""
     rng = np.random.default_rng(0)
     X = _state(seed=44)
     cm = _full_mask(X.shape[:2])
     perturbed, report = make_projection_invisible_perturbation(
         X, candidate_mask=cm, projection_name="multi_channel_projection",
-        rng=rng, max_attempts=5, target_flip_fraction=0.25,
-        verification_tolerance=0.0,  # zero tolerance — strict
+        rng=rng, target_flip_fraction=0.25,
     )
-    # The reported strategy is verification-based.
-    assert report["preservation_strategy"] == "verification"
-    # Either accepted (a flip set happened to preserve the channels)
-    # or rejected with a clear reason.
+    assert report["preservation_strategy"] == "channel_signature_pair_swap"
     if report["accepted"]:
         p_un = _project("multi_channel_projection", X)
         p_pe = _project("multi_channel_projection", perturbed)
         np.testing.assert_array_equal(p_un, p_pe)
-    else:
-        assert "verification failed" in (report["invalid_reason"] or "")
+        assert report["initial_projection_delta"] <= 1e-6
+        assert report["n_flipped"] > 0
+
+
+def test_multi_channel_no_signature_match_reports_clear_invalid():
+    """If a candidate fibre has NO signature group with both ON and
+    OFF cells, we get the precise reason 'no_channel_preserving_pair'."""
+    # All-zero candidate region: every cell is OFF, no signature group
+    # has both ON and OFF -> rejected.
+    X = np.zeros((6, 6, 4, 4), dtype=np.uint8)
+    cm = np.zeros(X.shape[:2], dtype=bool); cm[2, 2] = True
+    rng = np.random.default_rng(0)
+    perturbed, report = make_projection_invisible_perturbation(
+        X, candidate_mask=cm, projection_name="multi_channel_projection",
+        rng=rng,
+    )
+    assert report["accepted"] is False
+    assert "no_channel_preserving_pair" in (report["invalid_reason"] or "")
+    np.testing.assert_array_equal(X, perturbed)
+
+
+def test_invalid_report_includes_tolerance_and_strategy():
+    rng = np.random.default_rng(0)
+    X = _state(seed=21)
+    cm = _full_mask(X.shape[:2])
+    _, report = make_projection_invisible_perturbation(
+        X, candidate_mask=cm, projection_name="random_linear_projection",
+        rng=rng, verification_tolerance=1e-6,
+    )
+    assert "preservation_strategy" in report
+    assert "projection_tolerance_used" in report
+    assert "best_pair_delta" in report
 
 
 # ---------------------------------------------------------------------------

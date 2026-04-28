@@ -95,6 +95,15 @@ def _sum_threshold_projection(state_4d: np.ndarray, theta: int = 1) -> np.ndarra
     return (s >= int(theta)).astype(np.uint8)
 
 
+def random_linear_weights(nz: int, nw: int, *, seed: int = 0) -> np.ndarray:
+    """Deterministic ``(nz, nw)`` weight matrix for ``random_linear`` /
+    ``random_linear_projection``. Exposed so callers (e.g. the
+    invisible-perturbation generator) can reproduce the projection's
+    weights without going through ``_random_linear_projection``."""
+    rng = np.random.default_rng(int(seed))
+    return rng.standard_normal((int(nz), int(nw))).astype(np.float32)
+
+
 def _random_linear_projection(
     state_4d: np.ndarray, *, seed: int = 0,
 ) -> np.ndarray:
@@ -110,12 +119,27 @@ def _random_linear_projection(
             f"random_linear expects a 4D array, got {state_4d.ndim}D"
         )
     nz, nw = state_4d.shape[2:]
-    rng = np.random.default_rng(int(seed))
-    weights = rng.standard_normal((nz, nw)).astype(np.float32)
+    weights = random_linear_weights(nz, nw, seed=seed)
     # Einsum keeps it on the active backend (numpy here; cupy users
     # should call the suite with cupy arrays directly — the einsum
     # dispatches via the array's __array_function__).
     return np.einsum("xyzw,zw->xy", state_4d.astype(np.float32), weights)
+
+
+def multi_channel_masks(
+    nz: int, nw: int, *, n_channels: int = 4, seed: int = 0,
+) -> np.ndarray:
+    """Deterministic ``(n_channels, nz, nw)`` random binary masks for
+    ``multi_channel_projection``. Exposed for the invisible-
+    perturbation generator's signature-based pair-swap strategy."""
+    rng = np.random.default_rng(int(seed))
+    masks = []
+    for c in range(int(n_channels)):
+        m = rng.integers(0, 2, size=(int(nz), int(nw))).astype(np.float32)
+        if m.sum() == 0:
+            m[0, 0] = 1.0
+        masks.append(m)
+    return np.stack(masks, axis=0)
 
 
 def _multi_channel_projection(
@@ -133,16 +157,12 @@ def _multi_channel_projection(
             f"multi_channel expects a 4D array, got {state_4d.ndim}D"
         )
     nz, nw = state_4d.shape[2:]
-    rng = np.random.default_rng(int(seed))
-    nc = int(n_channels)
+    masks = multi_channel_masks(nz, nw, n_channels=n_channels, seed=seed)
     out_channels = []
-    for c in range(nc):
-        mask = rng.integers(0, 2, size=(nz, nw)).astype(np.float32)
-        if mask.sum() == 0:
-            mask[0, 0] = 1.0
-        # Mean over the masked fibres.
-        weighted = (state_4d.astype(np.float32) * mask).sum(axis=(2, 3))
-        weighted /= mask.sum()
+    for c in range(int(n_channels)):
+        m = masks[c]
+        weighted = (state_4d.astype(np.float32) * m).sum(axis=(2, 3))
+        weighted /= m.sum()
         out_channels.append((weighted > 0.5).astype(np.uint8))
     return np.stack(out_channels, axis=-1)
 

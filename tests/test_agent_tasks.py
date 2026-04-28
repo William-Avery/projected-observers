@@ -167,6 +167,33 @@ def test_memory_evaluator_returns_one_trial_per_horizon():
         assert t.cue_memory_score is not None
 
 
+def test_run_tasks_for_candidate_records_visible_intervention_delta():
+    """Stage 5B: visible_intervention_task_delta is also recorded
+    alongside hidden_intervention_task_delta for repair and memory."""
+    import numpy as np
+    from observer_worlds.experiments._followup_agent_tasks import (
+        run_tasks_for_candidate,
+    )
+    cic, bs = _tiny_cic()
+    rng = np.random.default_rng(0)
+    trials = run_tasks_for_candidate(
+        cic=cic, rule_bs=bs, projection_name="mean_threshold",
+        horizons=(2, 5), backend="numpy",
+        tasks=["repair", "memory"], rng=rng,
+        measure_hidden_intervention_delta=True,
+    )
+    # 2 tasks × 2 horizons = 4 trials.
+    assert len(trials) == 4
+    # When the visible perturbation succeeds, EVERY trial gets a
+    # visible delta recorded; when it fails, all are None.
+    has_visible = [t.visible_intervention_task_delta is not None
+                   for t in trials]
+    if any(has_visible):
+        assert all(has_visible), (
+            f"partial visible deltas: {has_visible}"
+        )
+
+
 def test_run_tasks_for_candidate_records_hidden_intervention_delta():
     """Stage 5A: hidden_intervention_task_delta is computed for repair
     and memory; foraging is intentionally skipped (smoke quality)."""

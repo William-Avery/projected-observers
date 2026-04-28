@@ -115,8 +115,17 @@ def aggregate_agent_task_results(
 
     per_task: dict[str, dict] = {}
     for task, ts in by_task.items():
-        deltas = [t.hidden_intervention_task_delta for t in ts
-                   if t.hidden_intervention_task_delta is not None]
+        h_deltas = [t.hidden_intervention_task_delta for t in ts
+                     if t.hidden_intervention_task_delta is not None]
+        v_deltas = [t.visible_intervention_task_delta for t in ts
+                     if t.visible_intervention_task_delta is not None]
+        # Per-trial paired hidden − visible delta when both exist.
+        hv_pairs = [
+            (t.hidden_intervention_task_delta - t.visible_intervention_task_delta)
+            for t in ts
+            if (t.hidden_intervention_task_delta is not None
+                and t.visible_intervention_task_delta is not None)
+        ]
         per_task[task] = {
             "n_trials": len(ts),
             "n_survived": sum(1 for t in ts if t.survived),
@@ -129,12 +138,24 @@ def aggregate_agent_task_results(
             "mean_hce": _safe_mean(t.hce for t in ts),
             "mean_observer_score":
                 _safe_mean(t.observer_score for t in ts),
-            "n_with_hidden_intervention_delta": len(deltas),
+            # Hidden-intervention delta (Stage 5A).
+            "n_with_hidden_intervention_delta": len(h_deltas),
             "mean_hidden_intervention_task_delta":
-                _safe_mean(deltas),
+                _safe_mean(h_deltas),
             "fraction_perturbation_hurt_task":
-                (sum(1 for d in deltas if d > 0) / len(deltas))
-                if deltas else None,
+                (sum(1 for d in h_deltas if d > 0) / len(h_deltas))
+                if h_deltas else None,
+            # Visible-intervention delta (Stage 5B).
+            "n_with_visible_intervention_delta": len(v_deltas),
+            "mean_visible_intervention_task_delta":
+                _safe_mean(v_deltas),
+            "fraction_visible_perturbation_hurt_task":
+                (sum(1 for d in v_deltas if d > 0) / len(v_deltas))
+                if v_deltas else None,
+            # Hidden vs visible — paired per trial.
+            "n_with_hidden_vs_visible_delta": len(hv_pairs),
+            "mean_hidden_vs_visible_task_delta":
+                _safe_mean(hv_pairs),
         }
 
     # Correlations: per-candidate (one row per candidate × task in
@@ -269,32 +290,48 @@ def write_summary_md(summary: dict, path: Path) -> None:
         ]))
     lines.append("")
 
-    # Hidden intervention task deltas (Stage 5A).
-    has_delta = any(
+    # Hidden + visible intervention task deltas (Stage 5A / 5B).
+    has_h_delta = any(
         agg.get("n_with_hidden_intervention_delta", 0) > 0
         for agg in summary["per_task"].values()
     )
-    if has_delta:
-        lines.append("## Hidden intervention task deltas")
+    has_v_delta = any(
+        agg.get("n_with_visible_intervention_delta", 0) > 0
+        for agg in summary["per_task"].values()
+    )
+    if has_h_delta or has_v_delta:
+        lines.append("## Hidden vs visible intervention task deltas")
         lines.append("")
         lines.append(
-            "``hidden_intervention_task_delta = task_score_original − "
-            "task_score_hidden_perturbed``. Positive ⇒ the hidden "
-            "perturbation hurt task performance; negative ⇒ helped."
+            "``X_intervention_task_delta = task_score_original − "
+            "task_score_X_perturbed``. Positive ⇒ the perturbation hurt "
+            "task performance; negative ⇒ helped. ``hidden`` is a "
+            "projection-preserving (invisible) perturbation; ``visible`` "
+            "deliberately changes the projection."
         )
         lines.append("")
-        lines.append(_md_row(["task", "n_with_delta",
-                               "mean Δ (orig − pert)",
-                               "frac perturb hurt"]))
-        lines.append(_md_row(["---", "---:", "---:", "---:"]))
+        lines.append(_md_row([
+            "task", "n_h", "mean hidden Δ", "frac h-hurt",
+            "n_v", "mean visible Δ", "frac v-hurt",
+            "mean (h − v)",
+        ]))
+        lines.append(_md_row(["---"] + ["---:"] * 7))
         for task, agg in summary["per_task"].items():
-            n_d = agg.get("n_with_hidden_intervention_delta", 0)
-            mean_d = agg.get("mean_hidden_intervention_task_delta")
-            frac = agg.get("fraction_perturbation_hurt_task")
+            n_h = agg.get("n_with_hidden_intervention_delta", 0)
+            mean_h = agg.get("mean_hidden_intervention_task_delta")
+            frac_h = agg.get("fraction_perturbation_hurt_task")
+            n_v = agg.get("n_with_visible_intervention_delta", 0)
+            mean_v = agg.get("mean_visible_intervention_task_delta")
+            frac_v = agg.get("fraction_visible_perturbation_hurt_task")
+            mean_hv = agg.get("mean_hidden_vs_visible_task_delta")
             lines.append(_md_row([
-                task, n_d,
-                f"{mean_d:+.4f}" if mean_d is not None else "—",
-                f"{frac:.2f}" if frac is not None else "—",
+                task, n_h,
+                f"{mean_h:+.4f}" if mean_h is not None else "—",
+                f"{frac_h:.2f}" if frac_h is not None else "—",
+                n_v,
+                f"{mean_v:+.4f}" if mean_v is not None else "—",
+                f"{frac_v:.2f}" if frac_v is not None else "—",
+                f"{mean_hv:+.4f}" if mean_hv is not None else "—",
             ]))
         lines.append("")
 
