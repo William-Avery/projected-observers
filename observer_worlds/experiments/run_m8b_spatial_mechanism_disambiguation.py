@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Summary.
     print("writing summary.md...")
-    (out_dir / "summary.md").write_text(render_m8b_summary_md(summary))
+    (out_dir / "summary.md").write_text(render_m8b_summary_md(summary), encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     return 0

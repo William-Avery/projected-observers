@@ -301,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     print("writing plots...")
     write_all_m8c_plots(all_results, plots_dir)
     print("writing summary.md...")
-    (out_dir / "summary.md").write_text(render_m8c_summary_md(summary))
+    (out_dir / "summary.md").write_text(render_m8c_summary_md(summary), encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     return 0

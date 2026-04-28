@@ -357,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     write_all_m5_plots(reports, plots_dir, per_candidate_max=min(args.top_k, len(reports)))
 
     summary = _build_summary_md(reports, agg, args.top_k, out_dir)
-    (out_dir / "summary.md").write_text(summary)
+    (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 
     config_dump = {
         "from_run": args.from_run,

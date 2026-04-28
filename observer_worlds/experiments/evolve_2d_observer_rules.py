@@ -284,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_history_csv(history, out_dir / "evolution_history.csv")
         _plot_history(history, plots_dir / "fitness_vs_generation.png")
     summary = _build_summary_md(reports, history, args, life_report, out_dir)
-    (out_dir / "summary.md").write_text(summary)
+    (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 
     cfg = {
         "strategy": args.strategy,

@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         "- `plots/*.png` — boxplots, paired-line plots, scatter, forest plot",
         "- `videos/top_candidates/<condition>/rule<R>_seed<S>.gif`",
     ]
-    (out_dir / "summary.md").write_text("\n".join(md_lines))
+    (out_dir / "summary.md").write_text("\n".join(md_lines), encoding="utf-8")
     print(f"\nDone. Run dir: {out_dir}")
     return 0
 

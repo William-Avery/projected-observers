@@ -906,7 +906,7 @@ def main(argv: list[str] | None = None) -> int:
     md.append("")
     for line in interpretations:
         md.append(f"- {line}")
-    (out_dir / "summary.md").write_text("\n".join(md))
+    (out_dir / "summary.md").write_text("\n".join(md), encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     print(f"Interpretations:")

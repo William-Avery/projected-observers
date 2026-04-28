@@ -202,7 +202,7 @@ def _run_one_pass(
         "",
         render_stats_summary_md(stats),
     ]
-    (sub / "summary.md").write_text("\n".join(sub_md))
+    (sub / "summary.md").write_text("\n".join(sub_md), encoding="utf-8")
     return stats
 
 
@@ -403,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     ])
     if stats_b is not None:
         combined_md.append("- `vs_optimized_2d/summary.md` — full M4B-style summary for Pass B")
-    (out_dir / "summary.md").write_text("\n".join(combined_md))
+    (out_dir / "summary.md").write_text("\n".join(combined_md), encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     print(f"Combined interpretation: {combined_interpretation(stats_a, stats_b)}")

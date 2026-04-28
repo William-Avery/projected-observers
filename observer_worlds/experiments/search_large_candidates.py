@@ -284,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     md.append("|---|---|")
     for src, n in src_counts.items():
         md.append(f"| {src} | {n} |")
-    (out_dir / "summary.md").write_text("\n".join(md))
+    (out_dir / "summary.md").write_text("\n".join(md), encoding="utf-8")
 
     print(f"\nFound {len(all_out)} candidates.")
     print(f"  morphology: {dict(morph_counts)}")

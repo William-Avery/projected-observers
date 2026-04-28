@@ -38,11 +38,13 @@ class WorldConfig:
     # dynamics; rule search is the proper way to find interesting rules.
     rule_birth: tuple[int, ...] = (30, 31, 32, 33)
     rule_survival: tuple[int, ...] = (28, 29, 30, 31, 32, 33, 34)
-    backend: str = "numba"  # "numba" | "numpy"
+    backend: str = "numba"  # "numba" | "numpy" | "cuda"
 
     def __post_init__(self) -> None:
-        if self.backend not in {"numba", "numpy"}:
-            raise ValueError(f"backend must be 'numba' or 'numpy', got {self.backend!r}")
+        if self.backend not in {"numba", "numpy", "cuda"}:
+            raise ValueError(
+                f"backend must be 'numba', 'numpy', or 'cuda', got {self.backend!r}"
+            )
         if not (0.0 <= self.initial_density <= 1.0):
             raise ValueError(f"initial_density must be in [0,1], got {self.initial_density}")
         # Coerce to tuple in case someone passes a list from JSON.

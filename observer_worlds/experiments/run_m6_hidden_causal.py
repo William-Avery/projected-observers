@@ -531,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---------------- summary
     summary = _build_combined_summary(coherent_reports, shuffled_reports, args, out_dir)
-    (out_dir / "summary.md").write_text(summary)
+    (out_dir / "summary.md").write_text(summary, encoding="utf-8")
 
     cfg_dump = {
         "from_run": args.from_run, "config": args.config,

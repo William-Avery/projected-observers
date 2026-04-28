@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     md.append("- `validation_scores.csv` — top-K re-evaluated on validation seeds")
     md.append("- `top_hce_rules.json` — feed to `run_m7_hce_holdout_validation --m7-rules`")
     md.append("- `plots/*.png`")
-    (out_dir / "summary.md").write_text("\n".join(md))
+    (out_dir / "summary.md").write_text("\n".join(md), encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     return 0

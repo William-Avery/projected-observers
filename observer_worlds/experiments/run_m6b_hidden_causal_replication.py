@@ -339,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("writing summary.md...")
     md = render_m6b_summary_md(summary)
-    (out_dir / "summary.md").write_text(md)
+    (out_dir / "summary.md").write_text(md, encoding="utf-8")
 
     print(f"\nDone. Run dir: {out_dir}")
     print(f"Headline horizon: {headline_h}")
