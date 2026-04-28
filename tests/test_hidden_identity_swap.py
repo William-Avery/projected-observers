@@ -31,12 +31,15 @@ def test_help_runs_without_error():
 
 
 def test_unsupported_match_mode_rejected_with_clear_error(tmp_path: Path):
+    """Stage 5A: morphology_nearest is now supported. Use a still-
+    unsupported mode (observer_score_bin) to verify the runner still
+    rejects them at config-resolution time."""
     with pytest.raises(SystemExit):
         runner.main([
             "--quick",
             "--out-root", str(tmp_path),
             "--label", "bad",
-            "--matching-mode", "morphology_nearest",
+            "--matching-mode", "observer_score_bin",
         ])
 
 
@@ -155,8 +158,10 @@ def test_supported_modes_listed():
     from observer_worlds.experiments._followup_identity_swap import (
         SUPPORTED_MATCH_MODES, UNSUPPORTED_MATCH_MODES,
     )
+    # Stage 5A: morphology_nearest is now supported.
     assert "same_area" in SUPPORTED_MATCH_MODES
     assert "feature_nearest" in SUPPORTED_MATCH_MODES
+    assert "morphology_nearest" in SUPPORTED_MATCH_MODES
     # Unsupported modes raise NotImplementedError, not silently succeed.
     for mode in UNSUPPORTED_MATCH_MODES:
         with pytest.raises(NotImplementedError):
@@ -164,6 +169,140 @@ def test_supported_modes_listed():
                 find_candidate_pairs,
             )
             find_candidate_pairs([], match_mode=mode, max_pairs=1)
+
+
+# ---------------------------------------------------------------------------
+# Stage 5A: visible-similarity gating
+# ---------------------------------------------------------------------------
+
+
+def test_translation_aligned_iou_identical_masks_is_one():
+    import numpy as np
+    from observer_worlds.experiments._followup_identity_swap import (
+        _translation_aligned_iou,
+    )
+    m = np.zeros((6, 6), dtype=bool); m[2:4, 2:4] = True
+    assert _translation_aligned_iou(m, m) == pytest.approx(1.0)
+
+
+def test_translation_aligned_iou_disjoint_masks_is_zero():
+    import numpy as np
+    from observer_worlds.experiments._followup_identity_swap import (
+        _translation_aligned_iou,
+    )
+    a = np.zeros((6, 6), dtype=bool); a[0, 0] = True
+    b = np.zeros((6, 6), dtype=bool); b[5, 5] = True
+    # Translation alignment crops both to 1x1; once aligned they're
+    # identical 1x1 patches -> IoU = 1. The metric is intentionally
+    # translation-invariant; this test documents that.
+    assert _translation_aligned_iou(a, b) == pytest.approx(1.0)
+
+
+def test_translation_aligned_iou_different_shapes_below_one():
+    import numpy as np
+    from observer_worlds.experiments._followup_identity_swap import (
+        _translation_aligned_iou,
+    )
+    a = np.zeros((6, 6), dtype=bool); a[1:3, 1:5] = True   # 2x4 rectangle
+    b = np.zeros((6, 6), dtype=bool); b[1:5, 2:4] = True   # 4x2 rectangle
+    iou = _translation_aligned_iou(a, b)
+    assert 0.0 < iou < 1.0
+
+
+def test_compute_visible_similarity_returns_combined_components():
+    """The combined score is the average of three components and lives
+    in [0, 1]."""
+    from observer_worlds.experiments._followup_identity_swap import (
+        compute_visible_similarity,
+    )
+    cic_a, _ = _tiny_cic()
+    cic_b, _ = _tiny_cic()
+    vs = compute_visible_similarity(cic_a, cic_b)
+    assert 0.0 <= vs["translation_aligned_iou"] <= 1.0
+    assert 0.0 <= vs["area_ratio"] <= 1.0
+    assert 0.0 <= vs["bbox_aspect_similarity"] <= 1.0
+    assert 0.0 <= vs["combined"] <= 1.0
+
+
+def _tiny_cic():
+    """Local helper to build a CandidateInCell quickly. Mirrors the
+    helper in test_agent_tasks.py — kept local for module isolation."""
+    import numpy as np
+    from observer_worlds.experiments._followup_identity_swap import (
+        CandidateInCell,
+    )
+    from observer_worlds.experiments._followup_projection import (
+        CandidateRef, initial_4d_state, run_substrate,
+    )
+    from observer_worlds.search.rules import FractionalRule
+    rule = FractionalRule(
+        birth_min=0.4, birth_max=0.6,
+        survive_min=0.3, survive_max=0.7,
+        initial_density=0.5,
+    )
+    bs = rule.to_bsrule()
+    grid = (10, 10, 3, 3)
+    state0 = initial_4d_state(grid, 0.5, seed=42)
+    stream = run_substrate(bs, state0, 8, backend="numpy")
+    peak_mask = np.zeros((10, 10), dtype=np.uint8)
+    peak_mask[3:6, 3:6] = 1
+    peak_interior = peak_mask.copy()
+    cand = CandidateRef(
+        candidate_id=0, track_id=0, peak_frame=2, peak_mask=peak_mask,
+        peak_interior=peak_interior, peak_bbox=(3, 3, 5, 5), lifetime=5,
+    )
+    return CandidateInCell(
+        cell_id="r|42", rule_id="r", rule_source="src", seed=42,
+        cand=cand, state_at_peak=stream[2].copy(), state_stream=stream,
+    ), bs
+
+
+def test_min_visible_similarity_threshold_rejects_low_quality_pair():
+    """A pair whose combined visible_similarity is below the threshold
+    is recorded with valid_swap=False and invalid_reason starting
+    with 'visible_similarity_too_low'."""
+    from observer_worlds.experiments._followup_identity_swap import (
+        measure_pair,
+    )
+    cic_a, bs = _tiny_cic()
+    cic_b, _ = _tiny_cic()
+    cic_b.seed = 99   # so different_cell-like check passes
+    cic_b.cell_id = "r|99"
+    # Pretend the matcher reported visible_similarity = 0.05 (low).
+    meta = {
+        "match_distance": 0.0,
+        "visible_similarity": 0.05,
+        "translation_aligned_iou": 0.0,
+        "area_ratio": 0.05,
+        "bbox_aspect_similarity": 0.10,
+        "area_a": 9.0, "area_b": 9.0,
+    }
+    res = measure_pair(
+        pair_id=0, A=cic_a, B=cic_b, match_meta=meta,
+        match_mode="morphology_nearest",
+        projection_name="mean_threshold",
+        horizons=(2, 5), rule_bs=bs, backend="numpy",
+        min_visible_similarity=0.30,
+    )
+    assert res.valid_swap_a is False
+    assert res.valid_swap_b is False
+    assert res.invalid_reason_a is not None
+    assert res.invalid_reason_a.startswith("visible_similarity_too_low")
+    assert res.invalid_reason_b == res.invalid_reason_a
+
+
+def test_morphology_features_computed():
+    from observer_worlds.experiments._followup_identity_swap import (
+        _morphology_features,
+    )
+    cic, _ = _tiny_cic()
+    feats = _morphology_features(cic)
+    # Returns 4-vector [area, perimeter, aspect, compactness].
+    assert feats.shape == (4,)
+    assert feats[0] > 0  # area
+    assert feats[1] > 0  # perimeter
+    assert 0.0 < feats[2] < 10.0  # aspect ratio (sane)
+    assert 0.0 <= feats[3] <= 2.0  # compactness loose
 
 
 # ---------------------------------------------------------------------------

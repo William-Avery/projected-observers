@@ -163,11 +163,18 @@ def _estimate_hce(
 def evaluate_repair(
     *, cic: CandidateInCell, rule_bs, projection_name: str,
     horizons: Sequence[int], backend: str,
+    state_override: np.ndarray | None = None,
 ) -> list[TaskTrial]:
     """Knock out the candidate's 4D support (set to zero in the (z, w)
     fibre at every (x, y) in the mask) and measure projected
-    re-activity inside the original mask across horizons."""
-    state = cic.state_at_peak
+    re-activity inside the original mask across horizons.
+
+    ``state_override`` lets callers run the same task starting from a
+    perturbed substrate (for the Stage-5A
+    ``hidden_intervention_task_delta`` measurement). Defaults to the
+    candidate's recorded peak state.
+    """
+    state = state_override if state_override is not None else cic.state_at_peak
     mask = cic.cand.peak_mask.astype(bool)
 
     perturbed = state.copy()
@@ -234,13 +241,14 @@ def _resource_region(centroid: tuple[float, float],
 def evaluate_foraging(
     *, cic: CandidateInCell, rule_bs, projection_name: str,
     horizons: Sequence[int], backend: str,
+    state_override: np.ndarray | None = None,
 ) -> list[TaskTrial]:
     """Place a passive disc resource at fixed offset from the
     candidate's centroid; measure projected activity inside that disc
     over horizons. Resource is non-coupling (does not affect CA
     updates) — this is a smoke-level signal of "drift / proximity",
     not a foraging claim."""
-    state = cic.state_at_peak
+    state = state_override if state_override is not None else cic.state_at_peak
     mask = cic.cand.peak_mask.astype(bool)
     Nx, Ny = state.shape[:2]
     if not mask.any():
@@ -344,12 +352,13 @@ def evaluate_memory(
     *, cic: CandidateInCell, rule_bs, projection_name: str,
     horizons: Sequence[int], backend: str,
     rng: np.random.Generator,
+    state_override: np.ndarray | None = None,
 ) -> list[TaskTrial]:
     """Apply two distinct cues (A and B) at the peak frame and run
     forward. cue_memory_score = projected-pattern divergence between
     cue-A and cue-B futures inside the candidate region. High score
     means the system retained cue identity over the rollout."""
-    state = cic.state_at_peak
+    state = state_override if state_override is not None else cic.state_at_peak
     mask = cic.cand.peak_mask.astype(bool)
     if not mask.any():
         return []
@@ -408,33 +417,78 @@ def run_tasks_for_candidate(
     horizons: Sequence[int], backend: str,
     tasks: Sequence[str],
     rng: np.random.Generator,
+    measure_hidden_intervention_delta: bool = True,
 ) -> list[TaskTrial]:
     """Compute HCE / observer-score proxy once per candidate; then run
-    each requested task and stamp the per-candidate predictors onto
-    every trial."""
+    each requested task. If ``measure_hidden_intervention_delta`` is
+    True (Stage-5A default), also run each task starting from a
+    projection-preserving hidden-perturbed state and record
+    ``hidden_intervention_task_delta = task_score_original −
+    task_score_hidden_perturbed`` per (trial, horizon)."""
+    from observer_worlds.projection import (
+        make_projection_invisible_perturbation,
+    )
+
     hce = _estimate_hce(
         cic.state_at_peak, cic.cand.peak_mask, rule_bs,
         projection_name=projection_name, horizons=horizons,
         backend=backend, rng=rng,
     )
     observer_proxy = float(cic.cand.lifetime)
+
+    # Build a hidden-invisible perturbed start state. For tasks that
+    # support state_override (repair, foraging, memory), the same
+    # perturbed state is reused so the delta is well-defined per task.
+    perturbed_state = None
+    perturbation_report = None
+    if measure_hidden_intervention_delta:
+        perturbed_state, perturbation_report = (
+            make_projection_invisible_perturbation(
+                cic.state_at_peak,
+                candidate_mask=cic.cand.peak_mask,
+                projection_name=projection_name,
+                rng=rng,
+                max_attempts=50,
+                target_flip_fraction=0.1,
+            )
+        )
+        if not perturbation_report.get("accepted"):
+            perturbed_state = None  # cannot measure delta cleanly
+
+    def _call(task, evaluator, override=None):
+        if task == "memory":
+            return evaluator(
+                cic=cic, rule_bs=rule_bs, projection_name=projection_name,
+                horizons=horizons, backend=backend, rng=rng,
+                state_override=override,
+            )
+        return evaluator(
+            cic=cic, rule_bs=rule_bs, projection_name=projection_name,
+            horizons=horizons, backend=backend,
+            state_override=override,
+        )
+
     out: list[TaskTrial] = []
     for task in tasks:
         evaluator = TASK_EVALUATORS.get(task)
         if evaluator is None:
             continue
-        if task == "memory":
-            trials = evaluator(
-                cic=cic, rule_bs=rule_bs, projection_name=projection_name,
-                horizons=horizons, backend=backend, rng=rng,
-            )
-        else:
-            trials = evaluator(
-                cic=cic, rule_bs=rule_bs, projection_name=projection_name,
-                horizons=horizons, backend=backend,
-            )
-        for t in trials:
+        original_trials = _call(task, evaluator, override=None)
+        # Compute hidden-intervention deltas for tasks where the
+        # measurement is meaningful (skip foraging at smoke quality).
+        perturbed_trials = None
+        if perturbed_state is not None and task in ("repair", "memory"):
+            perturbed_trials = _call(task, evaluator, override=perturbed_state)
+
+        for idx, t in enumerate(original_trials):
             t.hce = hce
             t.observer_score = observer_proxy
+            if perturbed_trials is not None and idx < len(perturbed_trials):
+                pt = perturbed_trials[idx]
+                if (t.task_score is not None
+                        and pt.task_score is not None):
+                    t.hidden_intervention_task_delta = (
+                        float(t.task_score) - float(pt.task_score)
+                    )
             out.append(t)
     return out

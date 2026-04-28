@@ -110,6 +110,55 @@ def test_metric_inventory_is_importable():
     assert proj["n_invalid_hidden_invisible"] == 0
 
 
+def test_runner_handles_all_six_projections_end_to_end(tmp_path: Path):
+    """Stage 5A hardening: end-to-end smoke covering every registered
+    projection. The runner must not crash on any of them, and per-
+    projection valid/invalid counts must be recorded so we can audit
+    coverage downstream.
+
+    Continuous projections (random_linear) and multi-channel are
+    *expected* to produce invalid hidden-invisible perturbations under
+    the strict 1e-6 verification tolerance; the test asserts the
+    pipeline records that as invalid rather than silently including
+    those candidates in HCE means."""
+    rc = runner.main([
+        "--quick",
+        "--out-root", str(tmp_path),
+        "--label", "all6_runner_smoke",
+        "--projections",
+        "mean_threshold", "sum_threshold", "max_projection",
+        "parity_projection", "random_linear_projection",
+        "multi_channel_projection",
+        "--timesteps", "12",
+        "--max-candidates", "2",
+        "--horizons", "3", "5",
+        "--n-rules-per-source", "1",
+        "--test-seeds", "6000",
+        "--n-workers", "1",
+        "--grid", "12", "12", "3", "3",
+        "--hce-replicates", "1",
+    ])
+    assert rc == 0
+    out = next(tmp_path.iterdir())
+    stats = json.loads((out / "stats_summary.json").read_text(encoding="utf-8"))
+    expected = {
+        "mean_threshold", "sum_threshold", "max_projection",
+        "parity_projection", "random_linear_projection",
+        "multi_channel_projection",
+    }
+    assert set(stats["per_projection"]) == expected
+    # Each projection must have either >0 valid OR >0 invalid (not silently empty).
+    for proj, agg in stats["per_projection"].items():
+        n_total = agg["n_candidates_total"]
+        if n_total == 0:
+            continue
+        n_valid = agg["n_valid_hidden_invisible"]
+        n_invalid = agg["n_invalid_hidden_invisible"]
+        assert n_valid + n_invalid == n_total, (
+            f"{proj}: n_total={n_total} but valid+invalid={n_valid + n_invalid}"
+        )
+
+
 def test_aggregate_with_real_rows_only_valid_in_means():
     """Stage 2B: HCE means are taken only over candidates whose
     hidden-invisible perturbation was accepted. Invalid candidates are

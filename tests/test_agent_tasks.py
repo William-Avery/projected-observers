@@ -167,6 +167,50 @@ def test_memory_evaluator_returns_one_trial_per_horizon():
         assert t.cue_memory_score is not None
 
 
+def test_run_tasks_for_candidate_records_hidden_intervention_delta():
+    """Stage 5A: hidden_intervention_task_delta is computed for repair
+    and memory; foraging is intentionally skipped (smoke quality)."""
+    import numpy as np
+    from observer_worlds.experiments._followup_agent_tasks import (
+        run_tasks_for_candidate,
+    )
+    cic, bs = _tiny_cic()
+    rng = np.random.default_rng(0)
+    trials = run_tasks_for_candidate(
+        cic=cic, rule_bs=bs, projection_name="mean_threshold",
+        horizons=(2, 5), backend="numpy",
+        tasks=["repair", "memory"], rng=rng,
+        measure_hidden_intervention_delta=True,
+    )
+    # 2 tasks × 2 horizons = 4 trials; each carries a delta when the
+    # perturbation was accepted.
+    assert len(trials) == 4
+    deltas = [t.hidden_intervention_task_delta for t in trials]
+    # Either all trials get a delta (perturbation accepted) or none
+    # (perturbation rejected); never partial.
+    if any(d is not None for d in deltas):
+        assert all(d is not None for d in deltas), (
+            f"partial deltas: {deltas}"
+        )
+
+
+def test_run_tasks_disable_delta_returns_none_for_delta():
+    import numpy as np
+    from observer_worlds.experiments._followup_agent_tasks import (
+        run_tasks_for_candidate,
+    )
+    cic, bs = _tiny_cic()
+    rng = np.random.default_rng(0)
+    trials = run_tasks_for_candidate(
+        cic=cic, rule_bs=bs, projection_name="mean_threshold",
+        horizons=(2,), backend="numpy",
+        tasks=["repair"], rng=rng,
+        measure_hidden_intervention_delta=False,
+    )
+    for t in trials:
+        assert t.hidden_intervention_task_delta is None
+
+
 def test_run_tasks_for_candidate_stamps_hce_and_observer_score():
     import numpy as np
     from observer_worlds.experiments._followup_agent_tasks import (

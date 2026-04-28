@@ -115,6 +115,8 @@ def aggregate_agent_task_results(
 
     per_task: dict[str, dict] = {}
     for task, ts in by_task.items():
+        deltas = [t.hidden_intervention_task_delta for t in ts
+                   if t.hidden_intervention_task_delta is not None]
         per_task[task] = {
             "n_trials": len(ts),
             "n_survived": sum(1 for t in ts if t.survived),
@@ -127,6 +129,12 @@ def aggregate_agent_task_results(
             "mean_hce": _safe_mean(t.hce for t in ts),
             "mean_observer_score":
                 _safe_mean(t.observer_score for t in ts),
+            "n_with_hidden_intervention_delta": len(deltas),
+            "mean_hidden_intervention_task_delta":
+                _safe_mean(deltas),
+            "fraction_perturbation_hurt_task":
+                (sum(1 for d in deltas if d > 0) / len(deltas))
+                if deltas else None,
         }
 
     # Correlations: per-candidate (one row per candidate × task in
@@ -260,6 +268,35 @@ def write_summary_md(summary: dict, path: Path) -> None:
                 if agg["mean_survival_time"] is not None else "—",
         ]))
     lines.append("")
+
+    # Hidden intervention task deltas (Stage 5A).
+    has_delta = any(
+        agg.get("n_with_hidden_intervention_delta", 0) > 0
+        for agg in summary["per_task"].values()
+    )
+    if has_delta:
+        lines.append("## Hidden intervention task deltas")
+        lines.append("")
+        lines.append(
+            "``hidden_intervention_task_delta = task_score_original − "
+            "task_score_hidden_perturbed``. Positive ⇒ the hidden "
+            "perturbation hurt task performance; negative ⇒ helped."
+        )
+        lines.append("")
+        lines.append(_md_row(["task", "n_with_delta",
+                               "mean Δ (orig − pert)",
+                               "frac perturb hurt"]))
+        lines.append(_md_row(["---", "---:", "---:", "---:"]))
+        for task, agg in summary["per_task"].items():
+            n_d = agg.get("n_with_hidden_intervention_delta", 0)
+            mean_d = agg.get("mean_hidden_intervention_task_delta")
+            frac = agg.get("fraction_perturbation_hurt_task")
+            lines.append(_md_row([
+                task, n_d,
+                f"{mean_d:+.4f}" if mean_d is not None else "—",
+                f"{frac:.2f}" if frac is not None else "—",
+            ]))
+        lines.append("")
 
     # Correlations.
     lines.append("## HCE / observer_score vs task_score (per-candidate)")

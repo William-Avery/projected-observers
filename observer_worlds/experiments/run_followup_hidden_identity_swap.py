@@ -75,6 +75,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "supports one projection per run.")
     p.add_argument("--projection-tolerance", type=float, default=None,
                    help="Max allowed projection-preservation error at t=0.")
+    p.add_argument("--min-visible-similarity", type=float, default=None,
+                   help="Reject pairs whose translation-aligned visible "
+                        "similarity is below this threshold (combined "
+                        "score over IoU + area_ratio + bbox_aspect).")
     p.add_argument("--hce-replicates", type=int, default=None)
     p.add_argument("--grid", type=int, nargs=4, default=None,
                    metavar=("NX", "NY", "NZ", "NW"))
@@ -99,6 +103,7 @@ def _full_defaults() -> dict:
         "projection_tolerance": 1e-6,
         "hce_replicates": 3,
         "grid": [64, 64, 8, 8],
+        "min_visible_similarity": 0.30,
     }
 
 
@@ -125,7 +130,7 @@ def _resolve_config(args: argparse.Namespace) -> dict:
     for key in ("n_workers", "backend", "max_candidates", "max_pairs",
                 "timesteps", "horizons", "n_rules_per_source", "test_seeds",
                 "matching_mode", "projection", "projection_tolerance",
-                "hce_replicates", "grid"):
+                "hce_replicates", "grid", "min_visible_similarity"):
         v = getattr(args, key)
         if v is not None:
             cfg[key] = list(v) if isinstance(v, list) else v
@@ -305,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  max_pairs       = {cfg['max_pairs']}")
     print(f"  horizons        = {cfg['horizons']}")
     print(f"  proj_tolerance  = {cfg['projection_tolerance']}")
+    print(f"  min_visible_sim = {cfg['min_visible_similarity']}")
 
     t_total = time.time()
 
@@ -362,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             horizons=cfg["horizons"],
             rule_bs=rule_bs_by_id[A.rule_id],
             backend=cfg["backend"],
+            min_visible_similarity=float(cfg["min_visible_similarity"]),
         )
     results: list[IdentityPairResult] = []
     if int(cfg["n_workers"]) > 1 and len(all_pairs) > 1:

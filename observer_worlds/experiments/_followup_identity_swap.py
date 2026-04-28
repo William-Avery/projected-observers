@@ -81,24 +81,121 @@ class CandidateInCell:
 SUPPORTED_MATCH_MODES = (
     "same_area",
     "feature_nearest",
+    "morphology_nearest",
 )
 UNSUPPORTED_MATCH_MODES = (
-    "morphology_nearest",
     "observer_score_bin",
     "mechanism_class",
     "strict_projection_equal",
 )
 
 
-def _candidate_features(c: CandidateInCell) -> np.ndarray:
-    """Compact feature vector for nearest-neighbor matching.
+def _morphology_features(c: CandidateInCell) -> np.ndarray:
+    """Shape descriptor for matching.
 
-    Stage 3 smoke: ``[area, lifetime, peak_frame]``. Production work
-    can layer on shape moments, observer_score, etc.
+    Returns ``[area, perimeter, bbox_aspect, compactness]``.
+      * area: number of ON cells in the peak mask
+      * perimeter: count of boundary cells (peak_mask AND NOT eroded)
+      * bbox_aspect: bbox_height / bbox_width
+      * compactness: 4·π·area / perimeter² (1.0 for perfect disc;
+        smaller for elongated shapes)
     """
+    import scipy.ndimage as ndi
+    m = c.cand.peak_mask.astype(bool)
+    area = int(m.sum())
+    if area == 0:
+        return np.array([0.0, 0.0, 1.0, 0.0])
+    eroded = ndi.binary_erosion(m, iterations=1)
+    boundary = m & ~eroded
+    perim = int(boundary.sum())
+    rmin, cmin, rmax, cmax = c.cand.peak_bbox
+    h = max(1, rmax - rmin + 1)
+    w = max(1, cmax - cmin + 1)
+    aspect = h / w
+    compact = (4.0 * np.pi * area) / (perim ** 2) if perim > 0 else 0.0
+    return np.array([float(area), float(perim), float(aspect),
+                     float(compact)])
+
+
+def _basic_features(c: CandidateInCell) -> np.ndarray:
+    """Stage-3 ``feature_nearest`` features: ``[area, lifetime, peak_frame]``."""
     area = float(int(c.cand.peak_mask.sum()))
     return np.array([area, float(c.cand.lifetime),
                      float(c.cand.peak_frame)], dtype=np.float64)
+
+
+def _crop_to_bbox(mask: np.ndarray) -> np.ndarray:
+    """Return the bounding-box crop of a 2D bool/uint8 mask."""
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if rows.size == 0:
+        return np.zeros((0, 0), dtype=bool)
+    return mask[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+
+
+def _translation_aligned_iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
+    """IoU between two masks after centring each in a common bbox.
+
+    Both masks are cropped to their bounding boxes, padded into a
+    common ``(max_h, max_w)`` frame at the centre, and IoU is computed
+    on the result. Robust to translation; sensitive to shape and area.
+    """
+    a = _crop_to_bbox(mask_a.astype(bool))
+    b = _crop_to_bbox(mask_b.astype(bool))
+    if a.size == 0 or b.size == 0:
+        return 0.0
+    th = max(a.shape[0], b.shape[0])
+    tw = max(a.shape[1], b.shape[1])
+    out_a = np.zeros((th, tw), dtype=bool)
+    out_b = np.zeros((th, tw), dtype=bool)
+    pa = ((th - a.shape[0]) // 2, (tw - a.shape[1]) // 2)
+    pb = ((th - b.shape[0]) // 2, (tw - b.shape[1]) // 2)
+    out_a[pa[0]:pa[0] + a.shape[0], pa[1]:pa[1] + a.shape[1]] = a
+    out_b[pb[0]:pb[0] + b.shape[0], pb[1]:pb[1] + b.shape[1]] = b
+    inter = float((out_a & out_b).sum())
+    union = float((out_a | out_b).sum())
+    return float(inter / union) if union > 0 else 0.0
+
+
+def _area_ratio(area_a: float, area_b: float) -> float:
+    """1.0 = identical area; lower = more dissimilar. ``[0, 1]``."""
+    a = max(0.0, float(area_a)); b = max(0.0, float(area_b))
+    if a == 0 and b == 0:
+        return 1.0
+    if a == 0 or b == 0:
+        return 0.0
+    return min(a, b) / max(a, b)
+
+
+def _bbox_aspect_similarity(c1: CandidateInCell, c2: CandidateInCell) -> float:
+    """1.0 = same aspect ratio; geometric-mean-style similarity."""
+    def aspect(c):
+        rmin, cmin, rmax, cmax = c.cand.peak_bbox
+        h = max(1, rmax - rmin + 1); w = max(1, cmax - cmin + 1)
+        return h / w
+    a1 = aspect(c1); a2 = aspect(c2)
+    return float(min(a1, a2) / max(a1, a2)) if max(a1, a2) > 0 else 1.0
+
+
+def compute_visible_similarity(a: CandidateInCell, b: CandidateInCell) -> dict:
+    """Visible-shape similarity for one candidate pair.
+
+    Returns a dict with the IoU plus the ``area_ratio`` and
+    ``bbox_aspect`` components, plus a single ``combined`` score that
+    averages them. The combined score is the canonical scalar used
+    against the ``min_visible_similarity`` threshold.
+    """
+    iou = _translation_aligned_iou(a.cand.peak_mask, b.cand.peak_mask)
+    ar = _area_ratio(int(a.cand.peak_mask.sum()),
+                      int(b.cand.peak_mask.sum()))
+    asp = _bbox_aspect_similarity(a, b)
+    combined = float((iou + ar + asp) / 3.0)
+    return {
+        "translation_aligned_iou": float(iou),
+        "area_ratio": float(ar),
+        "bbox_aspect_similarity": float(asp),
+        "combined": combined,
+    }
 
 
 def find_candidate_pairs(
@@ -116,10 +213,16 @@ def find_candidate_pairs(
       ``(rule_id, seed)`` runs so their substrates are independent.
     * ``max_pairs`` caps the number of pairs returned. Pairs are sorted
       by match-quality (lower distance is better).
+
+    The returned ``meta`` dict for each pair always includes
+    ``visible_similarity`` (the canonical combined score from
+    :func:`compute_visible_similarity`) plus its components, so
+    downstream gating on a min-visible-similarity threshold is well-
+    defined regardless of match mode.
     """
     if match_mode in UNSUPPORTED_MATCH_MODES:
         raise NotImplementedError(
-            f"matching mode {match_mode!r} is not implemented in Stage 3; "
+            f"matching mode {match_mode!r} is not implemented; "
             f"supported modes: {SUPPORTED_MATCH_MODES}"
         )
     if match_mode not in SUPPORTED_MATCH_MODES:
@@ -130,7 +233,18 @@ def find_candidate_pairs(
     if len(candidates) < 2:
         return []
 
-    cand_features = [_candidate_features(c) for c in candidates]
+    if match_mode == "morphology_nearest":
+        feats = [_morphology_features(c) for c in candidates]
+        # Normalize by std to put features on comparable scales.
+        F = np.stack(feats, axis=0)
+        sds = F.std(axis=0)
+        sds[sds < 1e-12] = 1.0
+        feats_norm = F / sds
+    elif match_mode == "feature_nearest":
+        feats_norm = [_basic_features(c) for c in candidates]
+    else:
+        feats_norm = None
+
     pair_records: list[tuple[float, int, int, dict]] = []
     for i, a in enumerate(candidates):
         for j, b in enumerate(candidates):
@@ -140,22 +254,27 @@ def find_candidate_pairs(
                 continue
             if different_cell and (a.cell_id == b.cell_id):
                 continue
-            fa, fb = cand_features[i], cand_features[j]
-            area_a, area_b = fa[0], fb[0]
+            area_a = float(int(a.cand.peak_mask.sum()))
+            area_b = float(int(b.cand.peak_mask.sum()))
             if match_mode == "same_area":
-                # Distance = absolute area difference. Smaller is better.
                 d = abs(area_a - area_b)
-                visible_similarity = 1.0 / (1.0 + d / max(area_a, area_b, 1.0))
             elif match_mode == "feature_nearest":
-                d = float(np.linalg.norm(fa - fb))
-                visible_similarity = 1.0 / (1.0 + d)
+                d = float(np.linalg.norm(feats_norm[i] - feats_norm[j]))
+            elif match_mode == "morphology_nearest":
+                d = float(np.linalg.norm(feats_norm[i] - feats_norm[j]))
             else:
                 continue
+            vs = compute_visible_similarity(a, b)
             pair_records.append((
                 d, i, j,
                 {
                     "match_distance": float(d),
-                    "visible_similarity": float(visible_similarity),
+                    "visible_similarity": float(vs["combined"]),
+                    "translation_aligned_iou": float(
+                        vs["translation_aligned_iou"]),
+                    "area_ratio": float(vs["area_ratio"]),
+                    "bbox_aspect_similarity": float(
+                        vs["bbox_aspect_similarity"]),
                     "area_a": float(area_a),
                     "area_b": float(area_b),
                 },
@@ -386,9 +505,50 @@ def measure_pair(
     horizons: Sequence[int],
     rule_bs,
     backend: str,
+    min_visible_similarity: float = 0.0,
 ) -> IdentityPairResult:
     """Run the swap intervention for one candidate pair."""
     suite = default_suite()
+    visible_sim = float(match_meta.get("visible_similarity", 0.0))
+    horizons_t = tuple(int(h) for h in horizons)
+
+    # Quality gate: pairs whose visible similarity is below the
+    # threshold are marked invalid before any rollout cost is paid.
+    if visible_sim < float(min_visible_similarity):
+        reason = (
+            f"visible_similarity_too_low "
+            f"(combined_visible_similarity={visible_sim:.3f} < "
+            f"threshold={min_visible_similarity:.3f})"
+        )
+        return IdentityPairResult(
+            pair_id=pair_id, rule_id=A.rule_id, rule_source=A.rule_source,
+            seed_a=int(A.seed), seed_b=int(B.seed),
+            projection_name=projection_name,
+            candidate_a_id=A.cand.candidate_id,
+            candidate_b_id=B.cand.candidate_id,
+            match_mode=match_mode,
+            match_distance=float(match_meta.get("match_distance", 0.0)),
+            visible_similarity=visible_sim,
+            area_a=int(A.cand.peak_mask.sum()),
+            area_b=int(B.cand.peak_mask.sum()),
+            hidden_distance=0.0,
+            n_cells_in_mask_a=int(A.cand.peak_mask.sum()),
+            n_cells_swapped_a=0,
+            projection_preservation_error_a=0.0,
+            valid_swap_a=False, invalid_reason_a=reason,
+            n_cells_in_mask_b=int(B.cand.peak_mask.sum()),
+            n_cells_swapped_b=0,
+            projection_preservation_error_b=0.0,
+            valid_swap_b=False, invalid_reason_b=reason,
+            horizons=horizons_t,
+            host_similarity_a_per_h=[None] * len(horizons_t),
+            donor_similarity_a_per_h=[None] * len(horizons_t),
+            host_similarity_b_per_h=[None] * len(horizons_t),
+            donor_similarity_b_per_h=[None] * len(horizons_t),
+            hidden_identity_pull_a_per_h=[None] * len(horizons_t),
+            hidden_identity_pull_b_per_h=[None] * len(horizons_t),
+        )
+
     a_centroid = (
         float(np.mean(np.where(A.cand.peak_mask)[0])),
         float(np.mean(np.where(A.cand.peak_mask)[1])),
@@ -418,7 +578,6 @@ def measure_pair(
         hyb_a.translation,
     )
 
-    horizons_t = tuple(int(h) for h in horizons)
     max_h = max(horizons_t) if horizons_t else 0
 
     host_sim_a, donor_sim_a, pull_a = [], [], []
