@@ -56,7 +56,36 @@
                 "candidates_measured": 1387,
                 "summary_md_path": "outputs/m8_20260427T214903Z/summary.md"
             },
-            "_post_sweep_note": "Original run's summary.md write failed mid-stream on a UnicodeEncodeError (cp1252 cannot encode U+2192 right-arrow). Recovered manually via the encoding=utf-8 fix in commit cbc0a79. CSVs, stats JSON, and plots all wrote correctly during the original run; only summary.md was empty before recovery."
+            "research_baseline": {
+                "_doc": "What this run actually measured (not a perf gate). Lets future readers compare M8 cross-source distributions against the M7-only baseline without re-reading the run output. See docs/M8_classifier_audit.md for classifier rule order and the boundary-vs-interior caveat.",
+                "sources": ["M7_HCE_optimized"],
+                "comparison_grid_present": false,
+                "mechanism_distribution_M7_HCE_optimized": {
+                    "boundary_mediated":      {"count": 1093, "fraction": 0.788, "ci": [0.767, 0.807]},
+                    "global_chaotic":         {"count":  257, "fraction": 0.185, "ci": [0.165, 0.205]},
+                    "unclear":                {"count":   28, "fraction": 0.020, "ci": [0.014, 0.027]},
+                    "delayed_hidden_channel": {"count":    7, "fraction": 0.005, "ci": [0.002, 0.009]},
+                    "interior_reservoir":     {"count":    2, "fraction": 0.001, "ci": [0.000, 0.004]},
+                    "environment_coupled":    {"count":    0, "fraction": 0.000, "ci": [0.000, 0.000]},
+                    "threshold_mediated":     {"count":    0, "fraction": 0.000, "ci": [0.000, 0.000]}
+                },
+                "per_source_aggregates_M7_HCE_optimized": {
+                    "mean_observer_score": 0.647,
+                    "mean_lifetime": 27.5,
+                    "mean_HCE": 0.0187,
+                    "mean_local_div": 0.290,
+                    "mean_boundary_response_fraction": 0.94,
+                    "mean_interior_response_fraction": 0.95,
+                    "mean_boundary_mediation_index": 0.498,
+                    "mean_candidate_locality_index": 0.018,
+                    "mean_far_hidden_effect": 0.019,
+                    "mean_near_threshold_fraction": 0.428
+                },
+                "interpretation_note": "Under the current classifier (priority-ordered; rule 3 fires on boundary_response_fraction > 0.6 alone), 78.8% of M7 candidates are labeled boundary_mediated. However, within that class boundary_mediation_index averages 0.500 and interior_response_fraction averages 1.000 — boundary and interior contribute roughly equally to mediation. Read this as 'boundary-organized response geometry,' not 'boundary-localized mediation.' See docs/M8_classifier_audit.md."
+            },
+            "_post_sweep_note": "Original run's summary.md write failed mid-stream on a UnicodeEncodeError (cp1252 cannot encode U+2192 right-arrow). Recovered manually via the encoding=utf-8 fix in commit cbc0a79. CSVs, stats JSON, and plots all wrote correctly during the original run; only summary.md was empty before recovery.",
+            "_audit_doc": "docs/M8_classifier_audit.md",
+            "_followup_spec": "docs/M8E_cross_source_mechanism_spec.md"
         },
         "m8_m7b_class_cuda_batched": null
     },
