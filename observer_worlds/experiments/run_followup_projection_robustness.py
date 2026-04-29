@@ -43,6 +43,8 @@ from observer_worlds.analysis.projection_robustness_plots import write_all_plots
 from observer_worlds.analysis.projection_robustness_stats import (
     PROJECTION_METRICS,
     aggregate_per_projection,
+    aggregate_per_projection_and_source,
+    compare_m7_vs_baselines_by_projection,
     write_summary_md,
 )
 from observer_worlds.experiments._followup_projection import (
@@ -50,6 +52,7 @@ from observer_worlds.experiments._followup_projection import (
 )
 from observer_worlds.perf import Profiler
 from observer_worlds.projection import default_suite
+from observer_worlds.experiments.run_m4b_observer_sweep import load_top_rules
 from observer_worlds.search.rules import FractionalRule
 
 
@@ -86,12 +89,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--hce-replicates", type=int, default=None)
     p.add_argument("--grid", type=int, nargs=4, default=None,
                    metavar=("NX", "NY", "NZ", "NW"))
-    p.add_argument("--rules-json", type=Path,
+    # Source rule files. ``--rules-json`` / ``--rules-from`` is the
+    # primary M7 source. ``--m4c-rules`` and ``--m4a-rules`` enable
+    # cross-source production sweeps (Stage 5C).
+    p.add_argument("--rules-json", "--rules-from", dest="rules_json",
+                   type=Path,
                    default=REPO / "release" / "rules" / "m7_top_hce_rules.json",
-                   help="Path to the rules JSON to load.")
+                   help="Path to the M7 rules JSON to load.")
+    p.add_argument("--m4c-rules", type=Path, default=None,
+                   help="Optional second rule source (M4C) for cross-"
+                        "source projection sweeps.")
+    p.add_argument("--m4a-rules", type=Path, default=None,
+                   help="Optional third rule source (M4A) for cross-"
+                        "source projection sweeps.")
+    # Seed shorthand: ``--seeds 6000..6019`` expands to range(6000, 6020).
+    p.add_argument("--seeds", type=str, default=None,
+                   help='Range shorthand for --test-seeds, e.g. "6000..6019".')
     p.add_argument("--profile", action="store_true",
                    help="Wrap the run with the M-perf profiler.")
     return p
+
+
+def _parse_seeds_arg(s: str) -> list[int]:
+    """Accept ``"6000..6019"`` or ``"6000,6001,6002"``."""
+    s = s.strip()
+    if ".." in s:
+        a, b = s.split("..", 1)
+        return list(range(int(a), int(b) + 1))
+    return [int(x) for x in s.replace(" ", ",").split(",") if x]
 
 
 def _full_defaults() -> dict:
@@ -138,7 +163,11 @@ def _resolve_config(args: argparse.Namespace) -> dict:
         v = getattr(args, key)
         if v is not None:
             cfg[key] = list(v) if isinstance(v, list) else v
+    if args.seeds is not None:
+        cfg["test_seeds"] = _parse_seeds_arg(args.seeds)
     cfg["rules_json"] = str(args.rules_json)
+    cfg["m4c_rules"] = str(args.m4c_rules) if args.m4c_rules else None
+    cfg["m4a_rules"] = str(args.m4a_rules) if args.m4a_rules else None
     suite = default_suite()
     for name in cfg["projections"]:
         if name not in suite.names():
@@ -196,8 +225,10 @@ def _build_frozen_manifest(cfg: dict) -> dict:
 
 
 def _load_rules(path: Path, n: int) -> list[FractionalRule]:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    return [FractionalRule.from_dict(r) for r in raw[:int(n)]]
+    """Wrapper around load_top_rules. Handles all three leaderboard
+    formats (bare top_rules.json, M4A viability leaderboard, M4C
+    fitness leaderboard)."""
+    return load_top_rules(Path(path), int(n))
 
 
 # ---------------------------------------------------------------------------
@@ -285,23 +316,37 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(_build_frozen_manifest(cfg), indent=2), encoding="utf-8",
     )
 
-    # Load rules.
-    rules = _load_rules(args.rules_json, cfg["n_rules_per_source"])
-    rule_records = []
-    for i, r in enumerate(rules):
-        rid = f"M7_HCE_optimized_rank{i+1:02d}"
-        rule_records.append({
-            "rule": r,
-            "rule_id": rid,
-            "rule_source": "M7_HCE_optimized",
-        })
+    # Load rules from each source. M7 is always loaded; M4C and M4A
+    # are optional. Source labels are stamped onto each rule and
+    # propagated through the pipeline so the aggregator can group by
+    # (projection × source).
+    rule_records: list[dict] = []
+    for path, source_label in [
+        (Path(cfg["rules_json"]), "M7_HCE_optimized"),
+        (Path(cfg["m4c_rules"]) if cfg.get("m4c_rules") else None,
+         "M4C_observer_optimized"),
+        (Path(cfg["m4a_rules"]) if cfg.get("m4a_rules") else None,
+         "M4A_viability"),
+    ]:
+        if path is None:
+            continue
+        loaded = _load_rules(path, cfg["n_rules_per_source"])
+        prefix = (source_label.split("_")[0]
+                  if "_" in source_label else source_label)
+        for i, r in enumerate(loaded):
+            rid = f"{source_label}_rank{i+1:02d}"
+            rule_records.append({
+                "rule": r, "rule_id": rid, "rule_source": source_label,
+            })
 
     print("=" * 72)
     print("Follow-up Topic 1: projection robustness — Stage 2")
     print("=" * 72)
+    sources_used = sorted({rec["rule_source"] for rec in rule_records})
     print(f"  out         = {out}")
     print(f"  backend     = {cfg['backend']}")
     print(f"  n_workers   = {cfg['n_workers']}")
+    print(f"  sources     = {sources_used}")
     print(f"  rules       = {len(rule_records)}")
     print(f"  seeds       = {len(cfg['test_seeds'])} ({cfg['test_seeds'][0]}..{cfg['test_seeds'][-1]})")
     print(f"  timesteps   = {cfg['timesteps']}")
@@ -380,6 +425,18 @@ def main(argv: list[str] | None = None) -> int:
     summary["n_cells"] = len(per_cell)
     summary["n_candidate_rows"] = len(candidate_rows)
     summary["projections_evaluated"] = list(cfg["projections"])
+    # Cross-source extensions (Stage 5C) — computed only when the run
+    # included multiple sources, but the helpers tolerate single-
+    # source runs gracefully (returning empty M4C/M4A entries).
+    sources_present = sorted({r["rule_source"] for r in candidate_rows})
+    summary["sources_present"] = sources_present
+    if len(sources_present) >= 2:
+        summary.update(aggregate_per_projection_and_source(
+            candidate_rows, cfg["projections"], sources=sources_present,
+        ))
+        summary.update(compare_m7_vs_baselines_by_projection(
+            candidate_rows, cfg["projections"],
+        ))
 
     # HCE by projection CSV (one row per projection).
     hce_rows = []
