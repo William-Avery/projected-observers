@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                                   "rule_source": source_label})
 
     print("=" * 72)
-    print("Follow-up Topic 2: hidden identity swap — Stage 3")
+    print("Follow-up Topic 2: hidden identity swap - Stage 3")
     print("=" * 72)
     print(f"  out             = {out}")
     print(f"  backend         = {cfg['backend']}")
