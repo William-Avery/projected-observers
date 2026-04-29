@@ -291,6 +291,105 @@ def test_min_visible_similarity_threshold_rejects_low_quality_pair():
     assert res.invalid_reason_b == res.invalid_reason_a
 
 
+def test_seeds_range_shorthand_parses():
+    from observer_worlds.experiments.run_followup_hidden_identity_swap import (
+        _parse_seeds_arg,
+    )
+    assert _parse_seeds_arg("6000..6004") == [6000, 6001, 6002, 6003, 6004]
+    assert _parse_seeds_arg("6000,6001,6002") == [6000, 6001, 6002]
+
+
+def test_cross_source_cli_writes_config_with_three_sources(tmp_path: Path):
+    """Stage 5C2: --m4c-rules and --m4a-rules wire up multi-source loading."""
+    rc = runner.main([
+        "--quick",
+        "--out-root", str(tmp_path),
+        "--label", "xsrc",
+        "--rules-from", "release/rules/m7_top_hce_rules.json",
+        "--m4c-rules", "release/rules/m4c_evolve_leaderboard.json",
+        "--m4a-rules", "release/rules/m4a_search_leaderboard.json",
+        "--n-rules-per-source", "1",
+        "--seeds", "6000..6002",
+        "--timesteps", "20",
+        "--max-candidates", "2",
+        "--max-pairs", "3",
+        "--horizons", "3", "5",
+        "--projection", "mean_threshold",
+        "--matching-mode", "morphology_nearest",
+        "--n-workers", "1",
+        "--grid", "12", "12", "3", "3",
+    ])
+    assert rc == 0
+    out = next(tmp_path.iterdir())
+    cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert cfg["test_seeds"] == [6000, 6001, 6002]
+    assert cfg["m4c_rules"]
+    assert cfg["m4a_rules"]
+    # Verify all three sources were loaded — at least M7 will appear in
+    # candidate_pairs (M4A/M4C may produce 0 candidates at this tiny
+    # smoke scale; that's OK).
+
+
+def test_default_discovery_does_not_carry_state_stream():
+    """Stage 5C2 regression: CandidateInCell records have state_stream
+    None by default. The full state stream is replaced by horizon-
+    indexed pre-projected frames (much smaller for IPC)."""
+    from observer_worlds.experiments._followup_identity_swap import (
+        discover_candidates_for_cell,
+    )
+    from observer_worlds.search.rules import FractionalRule
+    rule = FractionalRule(
+        birth_min=0.4, birth_max=0.6,
+        survive_min=0.3, survive_max=0.7,
+        initial_density=0.5,
+    )
+    cands = discover_candidates_for_cell(
+        rule_bs=rule.to_bsrule(),
+        rule_id="r", rule_source="src", seed=42,
+        grid_shape=(10, 10, 3, 3),
+        timesteps=10, backend="numpy",
+        projection_name="mean_threshold", max_candidates=3,
+        horizons=(2, 5),
+    )
+    for c in cands:
+        assert c.state_stream is None, (
+            "default discovery must NOT carry full state stream"
+        )
+        # state_at_peak is small (one frame).
+        assert c.state_at_peak.ndim == 4
+        # horizon_projected_frames is populated when horizons are
+        # provided.
+        if c.horizon_projected_frames is not None:
+            assert set(c.horizon_projected_frames.keys()).issubset({2, 5})
+
+
+def test_debug_flag_retains_state_stream():
+    """Opt-in: --return-state-stream-debug reattaches the full stream."""
+    from observer_worlds.experiments._followup_identity_swap import (
+        discover_candidates_for_cell,
+    )
+    from observer_worlds.search.rules import FractionalRule
+    rule = FractionalRule(
+        birth_min=0.4, birth_max=0.6,
+        survive_min=0.3, survive_max=0.7,
+        initial_density=0.5,
+    )
+    cands = discover_candidates_for_cell(
+        rule_bs=rule.to_bsrule(),
+        rule_id="r", rule_source="src", seed=42,
+        grid_shape=(10, 10, 3, 3),
+        timesteps=10, backend="numpy",
+        projection_name="mean_threshold", max_candidates=3,
+        horizons=(2, 5),
+        return_state_stream_debug=True,
+    )
+    for c in cands:
+        assert c.state_stream is not None, (
+            "debug flag must retain state_stream"
+        )
+        assert c.state_stream.ndim == 5  # (T+1, Nx, Ny, Nz, Nw)
+
+
 def test_morphology_features_computed():
     from observer_worlds.experiments._followup_identity_swap import (
         _morphology_features,

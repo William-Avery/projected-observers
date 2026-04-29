@@ -38,6 +38,7 @@ from observer_worlds.experiments._followup_identity_swap import (
     SUPPORTED_MATCH_MODES, IdentityPairResult,
     discover_candidates_for_cell, find_candidate_pairs, measure_pair,
 )
+from observer_worlds.experiments.run_m4b_observer_sweep import load_top_rules
 from observer_worlds.search.rules import FractionalRule
 
 
@@ -82,8 +83,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--hce-replicates", type=int, default=None)
     p.add_argument("--grid", type=int, nargs=4, default=None,
                    metavar=("NX", "NY", "NZ", "NW"))
-    p.add_argument("--rules-json", type=Path,
+    # Source rule files (Stage 5C2 / 5D production-ready surface).
+    p.add_argument("--rules-json", "--rules-from", dest="rules_json",
+                   type=Path,
                    default=REPO / "release" / "rules" / "m7_top_hce_rules.json")
+    p.add_argument("--m4c-rules", type=Path, default=None)
+    p.add_argument("--m4a-rules", type=Path, default=None)
+    # Range shorthand for --test-seeds, e.g. "6000..6019".
+    p.add_argument("--seeds", type=str, default=None)
+    p.add_argument("--return-state-stream-debug", action="store_true",
+                   help="Retain the full 4D state stream on every "
+                        "CandidateInCell. Default False (smaller IPC).")
     p.add_argument("--profile", action="store_true")
     return p
 
@@ -134,7 +144,12 @@ def _resolve_config(args: argparse.Namespace) -> dict:
         v = getattr(args, key)
         if v is not None:
             cfg[key] = list(v) if isinstance(v, list) else v
+    if args.seeds is not None:
+        cfg["test_seeds"] = _parse_seeds_arg(args.seeds)
     cfg["rules_json"] = str(args.rules_json)
+    cfg["m4c_rules"] = str(args.m4c_rules) if args.m4c_rules else None
+    cfg["m4a_rules"] = str(args.m4a_rules) if args.m4a_rules else None
+    cfg["return_state_stream_debug"] = bool(args.return_state_stream_debug)
     if cfg["matching_mode"] not in SUPPORTED_MATCH_MODES:
         raise SystemExit(
             f"matching_mode {cfg['matching_mode']!r} not yet implemented in "
@@ -178,9 +193,19 @@ def _build_frozen_manifest(cfg: dict) -> dict:
     }
 
 
+def _parse_seeds_arg(s: str) -> list[int]:
+    """Accept ``"6000..6019"`` or ``"6000,6001,6002"``."""
+    s = s.strip()
+    if ".." in s:
+        a, b = s.split("..", 1)
+        return list(range(int(a), int(b) + 1))
+    return [int(x) for x in s.replace(" ", ",").split(",") if x]
+
+
 def _load_rules(path: Path, n: int) -> list[FractionalRule]:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    return [FractionalRule.from_dict(r) for r in raw[:int(n)]]
+    """Wrapper around load_top_rules. Handles M7 top_rules.json,
+    M4A viability leaderboard, and M4C fitness leaderboard."""
+    return load_top_rules(Path(path), int(n))
 
 
 # ---------------------------------------------------------------------------
@@ -287,12 +312,22 @@ def main(argv: list[str] | None = None) -> int:
     (out / "frozen_manifest.json").write_text(
         json.dumps(_build_frozen_manifest(cfg), indent=2), encoding="utf-8",
     )
-    rules = _load_rules(args.rules_json, cfg["n_rules_per_source"])
-    rule_records = []
-    for i, r in enumerate(rules):
-        rid = f"M7_HCE_optimized_rank{i+1:02d}"
-        rule_records.append({"rule": r, "rule_id": rid,
-                              "rule_source": "M7_HCE_optimized"})
+    # Multi-source loading: M7 always, M4C / M4A optional. Stage 5C2.
+    rule_records: list[dict] = []
+    for path, source_label in [
+        (Path(cfg["rules_json"]), "M7_HCE_optimized"),
+        (Path(cfg["m4c_rules"]) if cfg.get("m4c_rules") else None,
+         "M4C_observer_optimized"),
+        (Path(cfg["m4a_rules"]) if cfg.get("m4a_rules") else None,
+         "M4A_viability"),
+    ]:
+        if path is None:
+            continue
+        loaded = _load_rules(path, cfg["n_rules_per_source"])
+        for i, r in enumerate(loaded):
+            rid = f"{source_label}_rank{i+1:02d}"
+            rule_records.append({"rule": r, "rule_id": rid,
+                                  "rule_source": source_label})
 
     print("=" * 72)
     print("Follow-up Topic 2: hidden identity swap — Stage 3")
@@ -320,6 +355,9 @@ def main(argv: list[str] | None = None) -> int:
         for rec in rule_records
         for seed in cfg["test_seeds"]
     ]
+    horizons_t = tuple(int(h) for h in cfg["horizons"])
+    return_state_stream_debug = bool(cfg.get("return_state_stream_debug",
+                                              False))
     def _discover(rec, seed):
         return discover_candidates_for_cell(
             rule_bs=rec["rule"].to_bsrule(),
@@ -331,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
             projection_name=cfg["projection"],
             max_candidates=int(cfg["max_candidates"]),
             initial_density=float(rec["rule"].initial_density),
+            horizons=horizons_t,
+            return_state_stream_debug=return_state_stream_debug,
         )
     if int(cfg["n_workers"]) > 1 and len(discovery_tasks) > 1:
         per_cell_candidates = Parallel(

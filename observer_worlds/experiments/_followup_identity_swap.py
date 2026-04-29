@@ -68,14 +68,32 @@ from observer_worlds.utils.config import DetectionConfig
 
 @dataclass
 class CandidateInCell:
-    """A candidate plus the substrate context needed to make a hybrid."""
+    """A candidate plus the substrate context needed to make a hybrid.
+
+    Stage 5C2 perf fix: the full ``state_stream`` (`(T+1, Nx, Ny, Nz, Nw)`,
+    ~65 MB at production grid) is no longer carried by default.
+    Instead, ``horizon_projected_frames`` keeps just the projected 2D
+    frames at ``peak_frame + h`` for each requested horizon (~32 KB
+    total per candidate at production grid). The ~1000× reduction
+    keeps joblib IPC cheap during cross-source production sweeps.
+
+    Callers that want the full state stream for debugging may pass
+    ``return_state_stream_debug=True`` to
+    :func:`discover_candidates_for_cell`; in that case ``state_stream``
+    is populated and ``measure_pair`` will prefer it over a fresh
+    rollout. The default-``None`` path is the audited production path.
+    """
     cell_id: str                 # e.g. "M7_HCE_optimized_rank01|6000"
     rule_id: str
     rule_source: str
     seed: int
     cand: CandidateRef
-    state_at_peak: np.ndarray    # 4D state at peak_frame
-    state_stream: np.ndarray     # full 4D stream (T+1, ...) for original future lookup
+    state_at_peak: np.ndarray    # 4D state at peak_frame (small: one frame)
+    horizon_projected_frames: dict[int, np.ndarray] | None = None
+    """Pre-projected 2D frames at ``peak_frame + h`` for h in horizons.
+    None when discovery did not pre-project (e.g. legacy callers)."""
+    state_stream: np.ndarray | None = None
+    """Full 4D state stream; populated only with the debug flag."""
 
 
 SUPPORTED_MATCH_MODES = (
@@ -600,21 +618,47 @@ def measure_pair(
             )
 
         for h in horizons_t:
-            # Original alpha future at A.peak + h (use saved stream where
-            # possible; fall back to fresh rollout).
-            t_a = A.cand.peak_frame + h
-            t_b = B.cand.peak_frame + h
-            avail_a = A.state_stream.shape[0] - 1
-            avail_b = B.state_stream.shape[0] - 1
-            state_a_future = (A.state_stream[t_a] if t_a <= avail_a
-                              else _rollout_perturbed(rule_bs, A.state_at_peak,
-                                                      h, backend=backend))
-            state_b_future = (B.state_stream[t_b] if t_b <= avail_b
-                              else _rollout_perturbed(rule_bs, B.state_at_peak,
-                                                      h, backend=backend))
+            # Original alpha future at A.peak + h. Three paths in
+            # priority order (Stage 5C2):
+            #   1. horizon_projected_frames[h] if discovery pre-projected
+            #      (production path; tiny IPC; ~32 KB per candidate).
+            #   2. state_stream[t] if the debug flag was set during
+            #      discovery (legacy / debug only).
+            #   3. fresh rollout from state_at_peak as a fallback
+            #      (correct but pays an extra rollout per (pair × h)).
+            host_a_pre = (A.horizon_projected_frames or {}).get(h)
+            if host_a_pre is not None:
+                host_a_proj = host_a_pre
+            elif A.state_stream is not None:
+                t_a = A.cand.peak_frame + h
+                avail_a = A.state_stream.shape[0] - 1
+                state_a_future = (A.state_stream[t_a] if t_a <= avail_a
+                                  else _rollout_perturbed(
+                                      rule_bs, A.state_at_peak, h,
+                                      backend=backend))
+                host_a_proj = _project_at(state_a_future)
+            else:
+                state_a_future = _rollout_perturbed(
+                    rule_bs, A.state_at_peak, h, backend=backend,
+                )
+                host_a_proj = _project_at(state_a_future)
+            host_b_pre = (B.horizon_projected_frames or {}).get(h)
+            if host_b_pre is not None:
+                host_b_proj = host_b_pre
+            elif B.state_stream is not None:
+                t_b = B.cand.peak_frame + h
+                avail_b = B.state_stream.shape[0] - 1
+                state_b_future = (B.state_stream[t_b] if t_b <= avail_b
+                                  else _rollout_perturbed(
+                                      rule_bs, B.state_at_peak, h,
+                                      backend=backend))
+                host_b_proj = _project_at(state_b_future)
+            else:
+                state_b_future = _rollout_perturbed(
+                    rule_bs, B.state_at_peak, h, backend=backend,
+                )
+                host_b_proj = _project_at(state_b_future)
 
-            host_a_proj = _project_at(state_a_future)
-            host_b_proj = _project_at(state_b_future)
             host_a_crop = _crop_bbox(host_a_proj, A.cand.peak_bbox)
             host_b_crop = _crop_bbox(host_b_proj, B.cand.peak_bbox)
 
@@ -690,10 +734,21 @@ def discover_candidates_for_cell(
     projection_name: str, max_candidates: int,
     initial_density: float = 0.5,
     detection_config: DetectionConfig | None = None,
+    horizons: tuple[int, ...] | None = None,
+    return_state_stream_debug: bool = False,
 ) -> list[CandidateInCell]:
     """Run substrate, project, detect, return CandidateInCell records.
-    The full state stream is retained so original-future lookups are
-    cheap during the swap-measurement phase.
+
+    Stage 5C2 perf fix: by default, only the candidate's
+    ``state_at_peak`` plus pre-projected 2D frames at
+    ``peak_frame + h`` for each ``h in horizons`` are stored on each
+    record (~64 KB per candidate at production grid). The full 4D
+    state stream stays local to the worker and is GC'd before the
+    record is IPC'd back to the parent.
+
+    Pass ``return_state_stream_debug=True`` to retain the full state
+    stream on every record (legacy behaviour; only useful for
+    debugging — joblib IPC of a 65 MB array per candidate scales badly).
     """
     det_cfg = detection_config or DetectionConfig()
     state0 = initial_4d_state(grid_shape, initial_density, seed=seed)
@@ -709,12 +764,26 @@ def discover_candidates_for_cell(
         binary_frames, det_cfg=det_cfg, max_candidates=max_candidates,
     )
     cell_id = f"{rule_id}|{seed}"
+    horizons_t = tuple(int(h) for h in (horizons or ()))
+    avail = stream.shape[0] - 1
     out = []
     for cr in cand_refs:
-        out.append(CandidateInCell(
+        # Pre-project the host's future at each requested horizon. Use
+        # binarize_for_detection so the host_similarity comparison sees
+        # the same kind of array as the hybrid rollouts produce.
+        per_h: dict[int, np.ndarray] = {}
+        for h in horizons_t:
+            t = int(cr.peak_frame) + int(h)
+            if 0 <= t <= avail:
+                per_h[int(h)] = binarize_for_detection(
+                    suite.project(projection_name, stream[t]), output_kind,
+                )
+        record = CandidateInCell(
             cell_id=cell_id, rule_id=rule_id, rule_source=rule_source,
             seed=int(seed), cand=cr,
             state_at_peak=stream[cr.peak_frame].copy(),
-            state_stream=stream,
-        ))
+            horizon_projected_frames=per_h if per_h else None,
+            state_stream=stream if return_state_stream_debug else None,
+        )
+        out.append(record)
     return out

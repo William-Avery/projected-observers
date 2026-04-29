@@ -159,6 +159,74 @@ def test_runner_handles_all_six_projections_end_to_end(tmp_path: Path):
         )
 
 
+def test_default_run_payload_does_not_carry_state_stream(tmp_path: Path):
+    """Stage 5C2 regression: ensure the per-cell return value from
+    run_one_cell does NOT carry the full 4D state stream — it would
+    blow up joblib IPC at production scale."""
+    from observer_worlds.experiments._followup_projection import run_one_cell
+    from observer_worlds.search.rules import FractionalRule
+    rule = FractionalRule(
+        birth_min=0.4, birth_max=0.6,
+        survive_min=0.3, survive_max=0.7,
+        initial_density=0.5,
+    )
+    out = run_one_cell(
+        rule_bs=rule.to_bsrule(), rule_id="r1", rule_source="src",
+        seed=42, grid_shape=(10, 10, 3, 3),
+        timesteps=8, backend="numpy",
+        projections=["mean_threshold"], suite=None,
+        max_candidates=2, horizons=(2, 5), hce_replicates=1,
+    )
+    assert "mean_threshold" in out
+    payload = out["mean_threshold"]
+    # Recursively verify no large array is in the payload.
+    import numpy as np
+    def _no_large_arrays(obj, depth=0):
+        if depth > 8: return True
+        if isinstance(obj, np.ndarray):
+            assert obj.size <= 256 * 256, (
+                f"large ndarray returned ({obj.shape}); IPC would blow up"
+            )
+            return True
+        if isinstance(obj, dict):
+            for v in obj.values():
+                _no_large_arrays(v, depth + 1)
+            return True
+        if isinstance(obj, (list, tuple)):
+            for v in obj:
+                _no_large_arrays(v, depth + 1)
+            return True
+        # Dataclasses (CandidateMetrics) — walk their fields.
+        if hasattr(obj, "__dataclass_fields__"):
+            for fname in obj.__dataclass_fields__:
+                _no_large_arrays(getattr(obj, fname), depth + 1)
+            return True
+        return True
+    _no_large_arrays(payload)
+
+
+def test_runner_records_state_stream_audit_in_summary(tmp_path: Path):
+    """The summary surfaces ``state_stream_returned`` so future readers
+    can audit the IPC payload contract."""
+    rc = runner.main([
+        "--quick",
+        "--out-root", str(tmp_path),
+        "--label", "audit",
+        "--timesteps", "10",
+        "--max-candidates", "1",
+        "--horizons", "2",
+        "--n-rules-per-source", "1",
+        "--test-seeds", "6000",
+        "--projections", "mean_threshold",
+        "--n-workers", "1",
+        "--grid", "10", "10", "3", "3",
+    ])
+    assert rc == 0
+    out = next(tmp_path.iterdir())
+    stats = json.loads((out / "stats_summary.json").read_text(encoding="utf-8"))
+    assert stats.get("state_stream_returned") is False
+
+
 def test_aggregate_with_real_rows_only_valid_in_means():
     """Stage 2B: HCE means are taken only over candidates whose
     hidden-invisible perturbation was accepted. Invalid candidates are

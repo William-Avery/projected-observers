@@ -107,6 +107,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help='Range shorthand for --test-seeds, e.g. "6000..6019".')
     p.add_argument("--profile", action="store_true",
                    help="Wrap the run with the M-perf profiler.")
+    p.add_argument("--return-state-stream-debug", action="store_true",
+                   help="Defensive flag (default False). Topic 1 workers "
+                        "do not return the 4D state stream regardless; "
+                        "this flag is recorded in the audit so future "
+                        "callers can verify the IPC payload shape.")
     return p
 
 
@@ -425,6 +430,16 @@ def main(argv: list[str] | None = None) -> int:
     summary["n_cells"] = len(per_cell)
     summary["n_candidate_rows"] = len(candidate_rows)
     summary["projections_evaluated"] = list(cfg["projections"])
+    # Stage 5C2 IPC audit: record the worker payload contract so a
+    # future reader can confirm the runner did not return state streams.
+    summary["state_stream_returned"] = bool(
+        getattr(args, "return_state_stream_debug", False)
+    )
+    summary["returned_payload_bytes_estimate"] = (
+        sum(int(r.get("n_candidates", 0))
+            * 256  # ~256 bytes per CandidateMetrics dataclass row
+            for r in cell_rows)
+    )
     # Cross-source extensions (Stage 5C) — computed only when the run
     # included multiple sources, but the helpers tolerate single-
     # source runs gracefully (returning empty M4C/M4A entries).
