@@ -71,6 +71,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--m4a-rules", type=Path, default=None)
     # Range shorthand for --test-seeds, e.g. "6000..6019".
     p.add_argument("--seeds", type=str, default=None)
+    p.add_argument("--memory-variants", nargs="+", default=None,
+                   choices=("cue_far_boundary", "cue_environment_shell",
+                            "cue_opposite_side", "cue_random_remote"),
+                   help="Stage 5E2 decoupled-memory audit. When set, the "
+                        "memory task runs the decoupled evaluator instead "
+                        "of the standard cue-A/cue-B inside-mask version.")
+    p.add_argument("--decoupling-overlap-threshold", type=float, default=0.05,
+                   help="Stage 5E2: trials with cue_region & hce_region "
+                        "overlap fraction above this threshold are flagged "
+                        "coupled and excluded from primary correlations.")
     p.add_argument("--profile", action="store_true")
     return p
 
@@ -128,6 +138,12 @@ def _resolve_config(args: argparse.Namespace) -> dict:
     cfg["rules_json"] = str(args.rules_json)
     cfg["m4c_rules"] = str(args.m4c_rules) if args.m4c_rules else None
     cfg["m4a_rules"] = str(args.m4a_rules) if args.m4a_rules else None
+    cfg["memory_variants"] = (
+        list(args.memory_variants) if args.memory_variants else None
+    )
+    cfg["decoupling_overlap_threshold"] = float(
+        args.decoupling_overlap_threshold
+    )
     return cfg
 
 
@@ -270,19 +286,38 @@ def main(argv: list[str] | None = None) -> int:
 
     rule_bs_by_id = {rec["rule_id"]: rec["rule"].to_bsrule()
                       for rec in rule_records}
-    def _measure(idx_cic):
-        idx, cic = idx_cic
-        rng = np.random.default_rng(
-            (int(cic.seed) ^ (idx * 7919) ^ 0xA9E47) & 0xFFFFFFFF
+    decoupled_mode = bool(cfg.get("memory_variants"))
+    if decoupled_mode:
+        from observer_worlds.experiments._followup_decoupled_memory import (
+            evaluate_decoupled_memory_for_candidate,
         )
-        return run_tasks_for_candidate(
-            cic=cic, rule_bs=rule_bs_by_id[cic.rule_id],
-            projection_name=cfg["projection"],
-            horizons=tuple(int(h) for h in cfg["horizons"]),
-            backend=cfg["backend"],
-            tasks=cfg["tasks"],
-            rng=rng,
-        )
+        def _measure(idx_cic):
+            idx, cic = idx_cic
+            rng = np.random.default_rng(
+                (int(cic.seed) ^ (idx * 7919) ^ 0xDEC09) & 0xFFFFFFFF
+            )
+            return evaluate_decoupled_memory_for_candidate(
+                cic=cic, rule_bs=rule_bs_by_id[cic.rule_id],
+                projection_name=cfg["projection"],
+                horizons=tuple(int(h) for h in cfg["horizons"]),
+                backend=cfg["backend"],
+                variants=cfg["memory_variants"], rng=rng,
+                overlap_threshold=cfg["decoupling_overlap_threshold"],
+            )
+    else:
+        def _measure(idx_cic):
+            idx, cic = idx_cic
+            rng = np.random.default_rng(
+                (int(cic.seed) ^ (idx * 7919) ^ 0xA9E47) & 0xFFFFFFFF
+            )
+            return run_tasks_for_candidate(
+                cic=cic, rule_bs=rule_bs_by_id[cic.rule_id],
+                projection_name=cfg["projection"],
+                horizons=tuple(int(h) for h in cfg["horizons"]),
+                backend=cfg["backend"],
+                tasks=cfg["tasks"],
+                rng=rng,
+            )
 
     if int(cfg["n_workers"]) > 1 and len(all_candidates) > 1:
         per_candidate_trials = Parallel(
@@ -292,13 +327,22 @@ def main(argv: list[str] | None = None) -> int:
         per_candidate_trials = [_measure((i, c))
                                  for i, c in enumerate(all_candidates)]
 
-    trials: list[TaskTrial] = []
+    trials = []
     next_id = 0
     for ts in per_candidate_trials:
         for t in ts:
             t.trial_id = next_id
             next_id += 1
             trials.append(t)
+
+    if decoupled_mode:
+        print(f"Computed {len(trials)} decoupled-memory trials.")
+        from observer_worlds.experiments._decoupled_memory_io import (
+            write_decoupled_outputs,
+        )
+        write_decoupled_outputs(trials, out, cfg=cfg, t_total=t_total)
+        print(f"\nDone in {time.time() - t_total:.1f}s. Output: {out}")
+        return 0
 
     print(f"Computed {len(trials)} task trials.")
 
