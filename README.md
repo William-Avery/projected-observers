@@ -39,6 +39,20 @@ is not supported, and the current mechanism picture
 tail; M7 mostly strengthens HCE inside existing mechanism classes
 rather than producing a new one).
 
+## Recent follow-up results
+
+Stage 5 spent the production-compute budget testing whether the HCE
+finding generalizes; Stage 6 replicates the production results on a
+fresh seed block (7000–7019, disjoint from the original 6000–6019).
+The figure below summarizes the four follow-up topics and the
+fresh-seed replication of the most novel finding.
+
+![Projected Observers Research — recent follow-up results: projection robustness, hidden identity swap, agent tasks, decoupled memory audit, and fresh-seed replication.](docs/images/followup_results_summary.png)
+
+A more detailed slide on **Projection Robustness** (Stages 5C / 5C2):
+
+![Projection robustness results: HCE is candidate-local across all six tested observation maps; M7's advantage is projection-conditional, not universal.](docs/images/projection_robustness_summary.png)
+
 ## Why each milestone exists
 
 Every milestone responds to a specific concern raised by the previous
