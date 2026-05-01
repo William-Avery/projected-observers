@@ -39,6 +39,35 @@ is not supported, and the current mechanism picture
 tail; M7 mostly strengthens HCE inside existing mechanism classes
 rather than producing a new one).
 
+## Stage 6 — Fresh-seed replication (complete)
+
+All four Stage 5 production findings replicate on a disjoint seed
+block (7000–7019, vs the original 6000–6019). No code or config knob
+was changed besides the seed range; the Stage 5 conclusions are not
+seed-block artifacts.
+
+| Stage | Topic | Wall | Verdict |
+|---|---|---:|:---:|
+| 6E2 | Decoupled memory audit | 1.18 h | replicated |
+| 6E | Agent tasks (repair / memory) | 2.66 h | replicated |
+| 6D | Hidden identity swap | 0.39 h | replicated |
+| 6C | Projection robustness | 6.48 h | replicated |
+
+**Interpretation.** Across ≈ 10.7 h of fresh-seed compute, the four
+load-bearing Stage 5 findings — projection-robust HCE (16/18 cells
+CI-clean), visible-host dominance with M7's small late-horizon
+positive pull, HCE strongly predicting memory and not repair, and the
+HCE-memory association surviving methodological decoupling — all
+recover at the same direction and CI-cleanness. See
+[docs/STAGE6_REPLICATION_SUMMARY.md](docs/STAGE6_REPLICATION_SUMMARY.md)
+for the per-stage table, output dirs, headline numbers, and caveats.
+
+> **Caveats.** This is a functional simulation result on a 4D → 2D
+> cellular-automaton substrate. It is *not* a claim about consciousness,
+> agency, or the real physical universe. The "observers" here are
+> tracked persistent structures with measurable functional signatures,
+> nothing more.
+
 ## Recent follow-up results
 
 Stage 5 spent the production-compute budget testing whether the HCE
