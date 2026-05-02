@@ -336,3 +336,29 @@ def _candidate_local_l1_xp(xp, projected_perturbed, projected_original, candidat
     # Sum over all but batch.
     axes = tuple(range(1, masked.ndim))
     return masked.sum(axis=axes).astype(xp.float32)
+
+
+def _candidate_local_l1_mean_xp(xp, projected_perturbed, projected_original, candidate_masks):
+    """Mean per-cell |perturbed - original| over the candidate region.
+
+    Mirrors :func:`observer_worlds.experiments._followup_projection._l1_local`:
+
+    * For ``(B, Nx, Ny)`` projections: ``diff[mask].sum() / mask.sum()``.
+    * For ``(B, Nx, Ny, C)`` multi-channel: average over channels first,
+      then ``diff_chan_avg[mask].sum() / mask.sum()``.
+
+    Returns ``(B,)`` float32. If a batch element's mask is empty the
+    result is 0.0 for that element (matches CPU semantics).
+    """
+    diff = xp.abs(
+        projected_perturbed.astype(xp.float32)
+        - projected_original.astype(xp.float32)
+    )
+    if diff.ndim == 4:
+        diff = diff.mean(axis=-1)
+    mask_f = candidate_masks.astype(xp.float32)
+    masked = diff * mask_f
+    summed = masked.sum(axis=(1, 2))
+    denom = mask_f.sum(axis=(1, 2))
+    safe = xp.where(denom > 0, denom, xp.ones_like(denom))
+    return xp.where(denom > 0, summed / safe, xp.zeros_like(summed)).astype(xp.float32)
