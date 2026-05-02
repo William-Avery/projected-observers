@@ -32,6 +32,20 @@ config and writes a side-by-side report:
 """
 from __future__ import annotations
 
+import os as _os
+
+# Pin BLAS thread counts BEFORE importing numpy / scipy / joblib so the
+# joblib loky workers (Windows spawn) inherit the limits. See
+# observer_worlds.experiments._parallel_discovery for the why.
+for _k in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    _os.environ.setdefault(_k, "1")
+
 import argparse
 import csv
 import json
@@ -40,7 +54,6 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -61,16 +74,13 @@ from observer_worlds.backends import (
 )
 from observer_worlds.experiments._followup_projection import (
     CandidateMetrics,
-    binarize_for_detection,
-    detect_candidates,
-    initial_4d_state,
-    project_stream,
-    run_substrate,
-    _bbox_mask,
-    _far_mask,
 )
 from observer_worlds.experiments._followup_projection_gpu import (
     measure_batch_on_gpu,
+)
+from observer_worlds.experiments._parallel_discovery import (
+    CandidateScaffold as _CandidateScaffold,
+    parallel_discover_all_cells,
 )
 from observer_worlds.experiments.run_followup_projection_robustness import (
     _build_frozen_manifest,
@@ -81,11 +91,7 @@ from observer_worlds.experiments.run_followup_projection_robustness import (
     _write_simple_csv,
 )
 from observer_worlds.perf import Profiler
-from observer_worlds.projection import (
-    default_suite,
-    make_projection_invisible_perturbation,
-)
-from observer_worlds.utils.config import DetectionConfig
+from observer_worlds.projection import default_suite
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -116,6 +122,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--projections", nargs="+",
                    default=default_suite().names())
     p.add_argument("--backend", default="cupy", choices=["cupy", "numpy"])
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="CPU candidate-discovery worker count "
+                        "(joblib loky; default: cpu_count - 2). The GPU "
+                        "controller is always single-process.")
     p.add_argument("--gpu-batch-size", type=int, default=64)
     p.add_argument("--gpu-memory-target-gb", type=float, default=9.5)
     p.add_argument("--gpu-device", type=int, default=0)
@@ -158,7 +168,10 @@ def _resolve_config(args: argparse.Namespace) -> dict:
         "gpu_batch_size": int(args.gpu_batch_size),
         "gpu_memory_target_gb": float(args.gpu_memory_target_gb),
         "gpu_device": int(args.gpu_device),
-        "n_workers": 1,
+        "n_workers": (
+            int(args.n_workers) if args.n_workers is not None
+            else max(1, (os.cpu_count() or 2) - 2)
+        ),
         "label": args.label,
         "equivalence_audit": bool(args.equivalence_audit),
     }
@@ -200,223 +213,42 @@ def _gather_rules(cfg: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# GPU work-item plumbing
+# CPU discovery (parallelized; see _parallel_discovery.py)
 # ---------------------------------------------------------------------------
+#
+# ``_CandidateScaffold`` is imported from
+# :mod:`observer_worlds.experiments._parallel_discovery` (alias above).
+# G3 refactor: the previous in-file ``_WorkItem`` dataclass was retired
+# because the parallel discovery path saves work items to per-(cell,
+# projection) ``.npz`` files instead of returning them through joblib
+# IPC. The GPU rollout phase loads those files lazily.
 
 
-@dataclass
-class _WorkItem:
-    """One (cell, projection, candidate, replicate) GPU rollout job."""
-    cell_key: tuple[str, int]                   # (rule_id, seed)
-    projection: str
-    candidate_id: int
-    replicate: int
-    state_orig: np.ndarray                      # (Nx, Ny, Nz, Nw) uint8
-    state_hidden: np.ndarray                    # same
-    state_far: np.ndarray                       # same
-    candidate_local_mask: np.ndarray            # (Nx, Ny) uint8
-    birth_lut: np.ndarray                       # (81,) uint8
-    surv_lut: np.ndarray                        # (81,) uint8
-    avail_steps: int
-
-
-@dataclass
-class _CandidateScaffold:
-    """Per-candidate book-keeping built during CPU discovery; finalized
-    after the GPU rollout populates HCE numbers."""
-    rule_id: str
-    rule_source: str
-    seed: int
-    projection: str
-    candidate_id: int
-    track_id: int
-    peak_frame: int
-    lifetime: int
-    accepted_first_replicate: bool
-    invalid_reason: str | None
-    preservation_strategy: str
-    initial_projection_delta: float
-    far_initial_projection_delta: float
-    n_flipped_hidden_first: int
-    n_flipped_far_first: int
-    avail_steps: int
-    # Filled in after GPU pass:
-    hce_per_replicate_per_horizon: list[list[float]]   # [replicate][horizon_idx]
-    far_per_replicate_per_horizon: list[list[float]]
-
-
-# ---------------------------------------------------------------------------
-# CPU discovery + work-list construction
-# ---------------------------------------------------------------------------
-
-
-def _discover_and_build_work_list(
-    *, cfg: dict, rule_records: list[dict], profiler: Profiler,
-) -> tuple[list[_WorkItem], dict, dict]:
-    """Run the CPU-side discovery for every (rule, seed, projection) cell.
+def _discover_and_build_work_list_parallel(
+    *, cfg: dict, rule_records: list[dict],
+    scratch_dir: str, profiler: Profiler,
+) -> tuple[dict, dict, dict, dict]:
+    """Run CPU-side discovery for every (rule, seed) cell in parallel
+    via :func:`parallel_discover_all_cells`.
 
     Returns
     -------
-    work_items
-        Flat list of GPU rollout jobs, one per (cell, projection,
-        candidate, replicate). Items for invalid candidates (where
-        ``make_projection_invisible_perturbation`` rejected the hidden
-        perturbation) are *omitted* — those candidates' HCE numbers
-        stay ``None`` and their scaffold's ``accepted_first_replicate``
-        is ``False``.
-    scaffolds
-        Dict keyed by ``(rule_id, seed, projection, candidate_id)``
-        mapping to :class:`_CandidateScaffold`. The runner uses this
-        to assemble :class:`CandidateMetrics` after the GPU pass.
     cell_meta
-        Dict keyed by ``(rule_id, seed, projection)`` mapping to per-
-        cell book-keeping (n_candidates, projection_supports_threshold_margin,
-        projection_output_kind) needed for cell_rows / audit_rows.
+        ``(rule_id, seed, projection) -> meta_dict``
+    scaffolds
+        ``(rule_id, seed, projection, candidate_id) -> CandidateScaffold``
+    work_files_per_proj
+        ``projection -> [npz_path, ...]`` (sorted)
+    discovery_stats
+        ``{n_cells, n_workers, payload_mb_total}``
     """
-    suite = default_suite()
-    det_cfg = DetectionConfig()
-    horizons = [int(h) for h in cfg["horizons"]]
-
-    work_items: list[_WorkItem] = []
-    scaffolds: dict[tuple, _CandidateScaffold] = {}
-    cell_meta: dict[tuple, dict] = {}
-
-    for rec in rule_records:
-        rule_bs = rec["rule"].to_bsrule()
-        bl, sl = rule_bs.to_lookup_tables(80)
-        bl = bl.astype(np.uint8)
-        sl = sl.astype(np.uint8)
-        for seed in cfg["test_seeds"]:
-            with profiler.phase("cpu_substrate_rollout"):
-                state0 = initial_4d_state(
-                    tuple(cfg["grid"]),
-                    float(rec["rule"].initial_density),
-                    seed=int(seed),
-                )
-                stream = run_substrate(
-                    rule_bs, state0, int(cfg["timesteps"]),
-                    backend=cfg["cpu_discovery_backend"],
-                )
-            # One per-cell RNG, shared across projections — matches CPU
-            # runner exactly.
-            rng = np.random.default_rng(int(seed) ^ 0xA51C0DE)
-            for projection in cfg["projections"]:
-                spec = suite.get(profile_name(projection))
-                with profiler.phase("cpu_projection_stream"):
-                    proj_stream = project_stream(suite, projection, stream)
-                    binary_frames = np.stack([
-                        binarize_for_detection(proj_stream[t], spec.output_kind)
-                        for t in range(proj_stream.shape[0])
-                    ], axis=0)
-                with profiler.phase("cpu_candidate_discovery"):
-                    cands = detect_candidates(
-                        binary_frames, det_cfg=det_cfg,
-                        max_candidates=int(cfg["max_candidates"]),
-                    )
-                cell_meta[(rec["rule_id"], int(seed), projection)] = {
-                    "rule_id": rec["rule_id"],
-                    "rule_source": rec["rule_source"],
-                    "seed": int(seed),
-                    "projection": projection,
-                    "n_candidates": len(cands),
-                    "projection_supports_threshold_margin":
-                        bool(spec.threshold_margin_supported),
-                    "projection_output_kind": spec.output_kind,
-                }
-                for c in cands:
-                    state_at_peak = stream[c.peak_frame]
-                    bbox = _bbox_mask(c.peak_bbox, stream.shape[1:3])
-                    far = _far_mask(c.peak_bbox, stream.shape[1:3])
-                    local_mask = c.peak_interior.astype(bool)
-                    if not local_mask.any():
-                        local_mask = c.peak_mask.astype(bool)
-                    avail = stream.shape[0] - 1 - c.peak_frame
-                    with profiler.phase("cpu_perturbation_construction"):
-                        s_h0, hidden_rep = make_projection_invisible_perturbation(
-                            state_at_peak, candidate_mask=bbox,
-                            projection_name=projection, rng=rng,
-                        )
-                        s_f0, far_rep = make_projection_invisible_perturbation(
-                            state_at_peak, candidate_mask=far,
-                            projection_name=projection, rng=rng,
-                        )
-                    accepted = bool(hidden_rep["accepted"])
-                    scaffold = _CandidateScaffold(
-                        rule_id=rec["rule_id"],
-                        rule_source=rec["rule_source"],
-                        seed=int(seed),
-                        projection=projection,
-                        candidate_id=int(c.candidate_id),
-                        track_id=int(c.track_id),
-                        peak_frame=int(c.peak_frame),
-                        lifetime=int(c.lifetime),
-                        accepted_first_replicate=accepted,
-                        invalid_reason=(
-                            None if accepted
-                            else str(hidden_rep.get("invalid_reason"))
-                        ),
-                        preservation_strategy=str(hidden_rep["preservation_strategy"]),
-                        initial_projection_delta=float(
-                            hidden_rep["initial_projection_delta"]
-                        ),
-                        far_initial_projection_delta=float(
-                            far_rep["initial_projection_delta"]
-                        ),
-                        n_flipped_hidden_first=int(hidden_rep.get("n_flipped", 0)),
-                        n_flipped_far_first=int(far_rep.get("n_flipped", 0)),
-                        avail_steps=int(avail),
-                        hce_per_replicate_per_horizon=[],
-                        far_per_replicate_per_horizon=[],
-                    )
-                    scaffolds[
-                        (rec["rule_id"], int(seed), projection,
-                         int(c.candidate_id))
-                    ] = scaffold
-                    if not accepted:
-                        # Match CPU semantics: invalid candidate is not
-                        # rolled out. RNG for further replicates is not
-                        # consumed (same as CPU's early-return path).
-                        continue
-                    # Replicate 0: use the just-constructed perturbations.
-                    work_items.append(_WorkItem(
-                        cell_key=(rec["rule_id"], int(seed)),
-                        projection=projection,
-                        candidate_id=int(c.candidate_id),
-                        replicate=0,
-                        state_orig=state_at_peak,
-                        state_hidden=s_h0, state_far=s_f0,
-                        candidate_local_mask=local_mask.astype(np.uint8),
-                        birth_lut=bl, surv_lut=sl,
-                        avail_steps=int(avail),
-                    ))
-                    # Replicates >= 1: re-roll perturbations using same RNG.
-                    for r in range(1, int(cfg["hce_replicates"])):
-                        with profiler.phase("cpu_perturbation_construction"):
-                            s_hr, _ = make_projection_invisible_perturbation(
-                                state_at_peak, candidate_mask=bbox,
-                                projection_name=projection, rng=rng,
-                            )
-                            s_fr, _ = make_projection_invisible_perturbation(
-                                state_at_peak, candidate_mask=far,
-                                projection_name=projection, rng=rng,
-                            )
-                        work_items.append(_WorkItem(
-                            cell_key=(rec["rule_id"], int(seed)),
-                            projection=projection,
-                            candidate_id=int(c.candidate_id),
-                            replicate=r,
-                            state_orig=state_at_peak,
-                            state_hidden=s_hr, state_far=s_fr,
-                            candidate_local_mask=local_mask.astype(np.uint8),
-                            birth_lut=bl, surv_lut=sl,
-                            avail_steps=int(avail),
-                        ))
-    return work_items, scaffolds, cell_meta
-
-
-def profile_name(projection_name: str) -> str:
-    """Pass-through alias kept for parity with future refactors."""
-    return projection_name
+    with profiler.phase("cpu_discovery"):
+        return parallel_discover_all_cells(
+            rule_records=rule_records,
+            cfg=cfg,
+            scratch_dir=scratch_dir,
+            n_workers=int(cfg["n_workers"]),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -425,82 +257,113 @@ def profile_name(projection_name: str) -> str:
 
 
 def _gpu_rollout_phase(
-    *, work_items: list[_WorkItem], scaffolds: dict, cfg: dict,
+    *, work_files_per_proj: dict[str, list[str]],
+    scaffolds: dict, cfg: dict,
     profiler: Profiler, backend_name: str,
 ) -> dict:
-    """Drive the GPU rollouts: groupby projection, chunk by gpu_batch_size,
-    populate per-replicate HCE/far_HCE into scaffolds.
+    """Drive the GPU rollouts: per projection, load each cell's work-item
+    npz file, batch by ``gpu_batch_size``, and populate per-replicate
+    HCE/far_HCE into scaffolds.
 
-    Returns a dict of GPU stats: ``{gpu_batches, gpu_transfer_in_s,
-    gpu_transfer_out_s, gpu_compute_s}``.
+    The npz files are produced by the parallel CPU discovery phase
+    (see :mod:`_parallel_discovery`); each file holds one (cell,
+    projection)'s work items as ``(N, ...)`` numpy arrays. Loading
+    one file at a time bounds peak host-side memory.
+
+    Returns a dict of GPU stats:
+    ``{gpu_batches, gpu_jobs, gpu_compute_s, gpu_memory_peak_mb,
+       gpu_transfer_in_s, gpu_transfer_out_s}``.
     """
     horizons = sorted(set(int(h) for h in cfg["horizons"]))
-    h_index = {h: i for i, h in enumerate(horizons)}
     backend = get_backend(backend_name, device=cfg["gpu_device"])
-    by_proj: dict[str, list[_WorkItem]] = {}
-    for w in work_items:
-        by_proj.setdefault(w.projection, []).append(w)
+    chunk = max(1, int(cfg["gpu_batch_size"]))
 
     stats = {
         "gpu_batches": 0,
+        "gpu_jobs": 0,
+        "gpu_compute_s": 0.0,
         "gpu_transfer_in_s": 0.0,
         "gpu_transfer_out_s": 0.0,
-        "gpu_compute_s": 0.0,
+        "gpu_memory_peak_mb": 0.0,
     }
 
-    for projection, items in by_proj.items():
-        chunk = max(1, int(cfg["gpu_batch_size"]))
-        # Per-projection params (multi_channel / random_linear use seed=0
-        # to match the default suite registration).
+    for projection, file_paths in work_files_per_proj.items():
         proj_params = _projection_params(projection)
-        for start in range(0, len(items), chunk):
-            sub = items[start:start + chunk]
-            B = len(sub)
-            states_o = np.stack([w.state_orig for w in sub], axis=0)
-            states_h = np.stack([w.state_hidden for w in sub], axis=0)
-            states_f = np.stack([w.state_far for w in sub], axis=0)
-            bl = np.stack([w.birth_lut for w in sub], axis=0)
-            sl = np.stack([w.surv_lut for w in sub], axis=0)
-            masks = np.stack([w.candidate_local_mask for w in sub], axis=0)
-            avail = np.array([w.avail_steps for w in sub], dtype=np.int32)
+        for path in file_paths:
+            data = np.load(path)
+            n = int(data["states_orig"].shape[0])
+            # Identify (rule_id, seed) from the path's parent npz name.
+            # Filename pattern: cell_<rid>_<seed>_<projection>.npz
+            # The (rid, seed) is needed to look up scaffolds.
+            stem = Path(path).stem  # "cell_<rid>_<seed>_<projection>"
+            # Strip the leading "cell_" and trailing "_<projection>".
+            head = stem[len("cell_"):]
+            head = head[:-(len(projection) + 1)]
+            # Now `head` is "<rid>_<seed>". seed is the trailing int.
+            last_us = head.rfind("_")
+            rid = head[:last_us]
+            seed = int(head[last_us + 1:])
+            cand_ids = data["candidate_ids"]
+            replicates = data["replicates"]
 
-            t0 = time.perf_counter()
-            with profiler.phase("gpu_batch_rollout"):
-                hce, far = measure_batch_on_gpu(
-                    backend=backend,
-                    states_orig=states_o,
-                    states_hidden=states_h,
-                    states_far=states_f,
-                    birth_luts=bl, surv_luts=sl,
-                    candidate_local_masks=masks,
-                    horizons=horizons,
-                    avail_steps=avail,
-                    projection=projection,
-                    projection_params=proj_params,
-                )
-            stats["gpu_compute_s"] += time.perf_counter() - t0
-            stats["gpu_batches"] += 1
+            for start in range(0, n, chunk):
+                end = min(n, start + chunk)
+                states_o = data["states_orig"][start:end]
+                states_h = data["states_hidden"][start:end]
+                states_f = data["states_far"][start:end]
+                bl = data["birth_luts"][start:end]
+                sl = data["surv_luts"][start:end]
+                masks = data["candidate_local_masks"][start:end]
+                avail = data["avail_steps"][start:end]
 
-            # Distribute results back to scaffolds.
-            for i, w in enumerate(sub):
-                key = (w.cell_key[0], w.cell_key[1], w.projection,
-                       w.candidate_id)
-                sc = scaffolds[key]
-                # row of (B, len(horizons)) for this batch element
-                hce_row = hce[i].tolist()
-                far_row = far[i].tolist()
-                # Append per-replicate (in replicate-order, since we
-                # process items as they appear in the batch).
-                # ensure replicate slot exists
-                while len(sc.hce_per_replicate_per_horizon) <= w.replicate:
-                    sc.hce_per_replicate_per_horizon.append(
-                        [float("nan")] * len(horizons),
+                t_xfer_in = time.perf_counter()
+                # measure_batch_on_gpu does the device upload internally;
+                # we measure the call as a whole (transfer+compute).
+                t0 = time.perf_counter()
+                with profiler.phase("gpu_batch_rollout"):
+                    hce, far = measure_batch_on_gpu(
+                        backend=backend,
+                        states_orig=states_o,
+                        states_hidden=states_h,
+                        states_far=states_f,
+                        birth_luts=bl, surv_luts=sl,
+                        candidate_local_masks=masks,
+                        horizons=horizons,
+                        avail_steps=avail,
+                        projection=projection,
+                        projection_params=proj_params,
                     )
-                    sc.far_per_replicate_per_horizon.append(
-                        [float("nan")] * len(horizons),
-                    )
-                sc.hce_per_replicate_per_horizon[w.replicate] = hce_row
-                sc.far_per_replicate_per_horizon[w.replicate] = far_row
+                stats["gpu_compute_s"] += time.perf_counter() - t0
+                stats["gpu_batches"] += 1
+                stats["gpu_jobs"] += int(end - start)
+
+                # Sample GPU mem after each batch; peak-track.
+                if backend.is_gpu and is_cupy_available():
+                    try:
+                        import cupy as cp
+                        free, total = cp.cuda.Device(int(cfg["gpu_device"])).mem_info
+                        used_mb = (total - free) / (1024 ** 2)
+                        if used_mb > stats["gpu_memory_peak_mb"]:
+                            stats["gpu_memory_peak_mb"] = round(used_mb, 1)
+                    except Exception:
+                        pass
+
+                # Distribute results back to scaffolds.
+                for i in range(end - start):
+                    cid = int(cand_ids[start + i])
+                    rep = int(replicates[start + i])
+                    key = (rid, seed, projection, cid)
+                    sc = scaffolds[key]
+                    while len(sc.hce_per_replicate_per_horizon) <= rep:
+                        sc.hce_per_replicate_per_horizon.append(
+                            [float("nan")] * len(horizons),
+                        )
+                        sc.far_per_replicate_per_horizon.append(
+                            [float("nan")] * len(horizons),
+                        )
+                    sc.hce_per_replicate_per_horizon[rep] = hce[i].tolist()
+                    sc.far_per_replicate_per_horizon[rep] = far[i].tolist()
+            data.close() if hasattr(data, "close") else None
     return stats
 
 
@@ -530,17 +393,27 @@ def _finalize_metrics(
     scaffolds: dict, cell_meta: dict, cfg: dict,
 ) -> tuple[list[dict], list[dict]]:
     """Build the same flattened ``(candidate_rows, cell_rows)`` shape as
-    the CPU runner's :func:`_flatten_results`."""
+    the CPU runner's :func:`_flatten_results`.
+
+    Determinism note: candidate_rows / cell_rows order is fixed by
+    ``(rule_id, seed, projection, candidate_id)`` so worker count does
+    not change CSV row order.
+    """
     horizons = sorted(set(int(h) for h in cfg["horizons"]))
-    # Group scaffolds by cell.
+    # Group scaffolds by cell, preserving deterministic order.
     by_cell: dict[tuple, dict[str, list[_CandidateScaffold]]] = {}
-    for (rid, seed, proj, cid), sc in scaffolds.items():
+    sorted_keys = sorted(scaffolds.keys(), key=lambda k: (k[0], k[1], k[2], k[3]))
+    for k in sorted_keys:
+        sc = scaffolds[k]
+        rid, seed, proj, _cid = k
         by_cell.setdefault((rid, seed), {}).setdefault(proj, []).append(sc)
 
     candidate_rows: list[dict] = []
     cell_rows: list[dict] = []
-    for cell_key, projections in by_cell.items():
-        for proj, scs in projections.items():
+    for cell_key in sorted(by_cell.keys()):
+        projections = by_cell[cell_key]
+        for proj in sorted(projections.keys()):
+            scs = projections[proj]
             meta = cell_meta[(cell_key[0], cell_key[1], proj)]
             cell_rows.append({
                 "rule_id": meta["rule_id"],
@@ -815,6 +688,7 @@ def run_gpu_pipeline(
     print(f"  horizons              = {cfg['horizons']}")
     print(f"  projections           = {cfg['projections']}")
     print(f"  replicates            = {cfg['hce_replicates']}")
+    print(f"  cpu_discovery_workers = {cfg['n_workers']}")
     print(f"  gpu_batch_size        = {cfg['gpu_batch_size']}")
     print(f"  gpu_memory_target_gb  = {cfg['gpu_memory_target_gb']}")
     if cfg["backend"] == "cupy" and is_cupy_available():
@@ -825,26 +699,55 @@ def run_gpu_pipeline(
     print()
 
     t_total = time.perf_counter()
-    # Phase 1: CPU discovery + work-list construction.
-    work_items, scaffolds, cell_meta = _discover_and_build_work_list(
-        cfg=cfg, rule_records=rule_records, profiler=profiler,
+    # Phase 1: parallel CPU discovery + work-list construction.
+    # Workers write per-(cell, projection) npz files under <out>/_workitems/
+    # and return only compact metadata + file paths (no large arrays
+    # cross joblib IPC).
+    scratch_dir = out / "_workitems"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    t_disc = time.perf_counter()
+    cell_meta, scaffolds, work_files_per_proj, discovery_stats = (
+        _discover_and_build_work_list_parallel(
+            cfg=cfg, rule_records=rule_records,
+            scratch_dir=str(scratch_dir),
+            profiler=profiler,
+        )
     )
-    print(f"  CPU phase: {len(scaffolds)} candidates discovered, "
-          f"{len(work_items)} GPU rollout jobs queued.")
+    discovery_wall = time.perf_counter() - t_disc
+    n_jobs = sum(
+        sum(int(np.load(p)["states_orig"].shape[0]) for p in paths)
+        for paths in work_files_per_proj.values()
+    )
+    print(
+        f"  CPU phase: {len(scaffolds)} candidates discovered, "
+        f"{n_jobs} GPU rollout jobs staged "
+        f"({discovery_stats['payload_mb_total']:.1f} MB on scratch), "
+        f"{discovery_wall:.1f}s wall, "
+        f"{cfg['n_workers']} workers."
+    )
 
-    # Phase 2: GPU rollout.
-    if work_items:
+    # Phase 2: GPU rollout (single controller, npz-driven).
+    t_gpu = time.perf_counter()
+    if work_files_per_proj:
         gpu_stats = _gpu_rollout_phase(
-            work_items=work_items, scaffolds=scaffolds, cfg=cfg,
+            work_files_per_proj=work_files_per_proj,
+            scaffolds=scaffolds, cfg=cfg,
             profiler=profiler, backend_name=cfg["backend"],
         )
     else:
         gpu_stats = {
-            "gpu_batches": 0, "gpu_transfer_in_s": 0.0,
-            "gpu_transfer_out_s": 0.0, "gpu_compute_s": 0.0,
+            "gpu_batches": 0, "gpu_jobs": 0, "gpu_compute_s": 0.0,
+            "gpu_transfer_in_s": 0.0, "gpu_transfer_out_s": 0.0,
+            "gpu_memory_peak_mb": 0.0,
         }
-    print(f"  GPU phase: {gpu_stats['gpu_batches']} batches, "
-          f"{gpu_stats['gpu_compute_s']:.2f}s compute.")
+    gpu_wall = time.perf_counter() - t_gpu
+    print(
+        f"  GPU phase: {gpu_stats['gpu_batches']} batches, "
+        f"{gpu_stats['gpu_jobs']} jobs, "
+        f"{gpu_stats['gpu_compute_s']:.2f}s compute, "
+        f"{gpu_wall:.2f}s wall, "
+        f"peak {gpu_stats['gpu_memory_peak_mb']:.0f} MB."
+    )
 
     # Phase 3: aggregate, write CSVs.
     with profiler.phase("csv_write"):
@@ -870,16 +773,33 @@ def run_gpu_pipeline(
                 candidate_rows, cfg["projections"],
             ))
 
-    # GPU performance counters into summary
+    # G3 perf counters into summary.
     total_wall = time.perf_counter() - t_total
-    summary["g2_perf"] = {
-        "total_wall_s": total_wall,
-        "candidates_per_second": (
-            len(scaffolds) / total_wall if total_wall > 0 else 0
+    # Stage 6C CPU baseline (numpy, 30 workers): 23318 s = 6.48 h.
+    stage6c_baseline_s = 23318.0
+    summary["g3_perf"] = {
+        "cpu_discovery_workers": int(cfg["n_workers"]),
+        "cpu_discovery_wall_s": round(discovery_wall, 2),
+        "cpu_discovery_cells_per_second": (
+            round(discovery_stats["n_cells"] / discovery_wall, 3)
+            if discovery_wall > 0 else 0
         ),
-        "rollouts_per_second": (
-            len(work_items) / total_wall if total_wall > 0 else 0
+        "cpu_discovery_payload_mb_estimate":
+            discovery_stats["payload_mb_total"],
+        "gpu_rollout_wall_s": round(gpu_wall, 2),
+        "gpu_batches": gpu_stats["gpu_batches"],
+        "gpu_jobs": gpu_stats["gpu_jobs"],
+        "gpu_rollouts_per_second": (
+            round(gpu_stats["gpu_jobs"] / gpu_wall, 2)
+            if gpu_wall > 0 else 0
         ),
+        "gpu_memory_peak_mb": gpu_stats["gpu_memory_peak_mb"],
+        "total_wall_s": round(total_wall, 2),
+        "speedup_vs_stage6c_cpu_baseline": (
+            round(stage6c_baseline_s / total_wall, 2)
+            if total_wall > 0 else None
+        ),
+        "stage6c_cpu_baseline_s": stage6c_baseline_s,
         **gpu_stats,
     }
 

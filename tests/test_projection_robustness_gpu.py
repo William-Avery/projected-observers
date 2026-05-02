@@ -275,6 +275,7 @@ def test_gpu_runner_csv_schema_matches_cpu(tmp_path):
         "--horizons", "5",
         "--projections", "mean_threshold",
         "--backend", "cupy",
+        "--n-workers", "1",
         "--gpu-batch-size", "16",
         "--out-root", str(tmp_path),
         "--label", "g2_schema",
@@ -293,3 +294,117 @@ def test_gpu_runner_csv_schema_matches_cpu(tmp_path):
     }
     missing = expected - set(gpu_cols)
     assert not missing, f"GPU CSV missing CPU columns: {sorted(missing)}"
+
+
+# ---------------------------------------------------------------------------
+# G3: parallel discovery determinism + IPC payload contract
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_discovery_n1_vs_n2_match(tmp_path):
+    """``parallel_discover_all_cells`` with n_workers=1 must produce
+    bit-identical scaffolds and on-disk work-item arrays as n_workers=2
+    on a small deterministic config."""
+    from observer_worlds.experiments._parallel_discovery import (
+        parallel_discover_all_cells,
+    )
+    from observer_worlds.search.rules import FractionalRule
+    from observer_worlds.experiments.run_m4b_observer_sweep import load_top_rules
+    rules = load_top_rules(REPO / "release" / "rules" / "m7_top_hce_rules.json", 1)
+    rule_records = [{
+        "rule": rules[0], "rule_id": "M7_test_rank01",
+        "rule_source": "M7_HCE_optimized",
+    }]
+    cfg = {
+        "test_seeds": [7000, 7001],
+        "timesteps": 50,
+        "grid": [16, 16, 4, 4],
+        "max_candidates": 3,
+        "hce_replicates": 1,
+        "horizons": [5],
+        "projections": ["mean_threshold"],
+        "cpu_discovery_backend": "numpy",
+    }
+    scratch1 = tmp_path / "n1"
+    scratch2 = tmp_path / "n2"
+    scratch1.mkdir(); scratch2.mkdir()
+    cm1, sc1, wf1, st1 = parallel_discover_all_cells(
+        rule_records=rule_records, cfg=cfg,
+        scratch_dir=str(scratch1), n_workers=1,
+    )
+    cm2, sc2, wf2, st2 = parallel_discover_all_cells(
+        rule_records=rule_records, cfg=cfg,
+        scratch_dir=str(scratch2), n_workers=2,
+    )
+    # cell_meta keys must match.
+    assert set(cm1.keys()) == set(cm2.keys())
+    # Scaffolds: same keys, equal scalar fields.
+    assert set(sc1.keys()) == set(sc2.keys())
+    for key in sc1:
+        a, b = sc1[key], sc2[key]
+        assert a.candidate_id == b.candidate_id
+        assert a.peak_frame == b.peak_frame
+        assert a.accepted_first_replicate == b.accepted_first_replicate
+        assert a.preservation_strategy == b.preservation_strategy
+        assert a.initial_projection_delta == b.initial_projection_delta, key
+        assert a.far_initial_projection_delta == b.far_initial_projection_delta
+        assert a.n_flipped_hidden_first == b.n_flipped_hidden_first
+        assert a.avail_steps == b.avail_steps
+    # Work-item arrays must match bit-for-bit.
+    for proj in wf1:
+        assert proj in wf2
+        # same number of files (1 per cell)
+        assert len(wf1[proj]) == len(wf2[proj])
+        for p1, p2 in zip(sorted(wf1[proj]), sorted(wf2[proj])):
+            d1 = np.load(p1); d2 = np.load(p2)
+            for k in d1.files:
+                np.testing.assert_array_equal(d1[k], d2[k], err_msg=f"{k} {p1} vs {p2}")
+
+
+def test_discovery_worker_payload_has_no_state_streams(tmp_path):
+    """Worker return payload must not carry full state streams or
+    arrays that would be expensive to ship through joblib IPC."""
+    from observer_worlds.experiments._parallel_discovery import (
+        discover_one_cell, CellDiscoveryResult,
+    )
+    from observer_worlds.experiments.run_m4b_observer_sweep import load_top_rules
+    rules = load_top_rules(REPO / "release" / "rules" / "m7_top_hce_rules.json", 1)
+    rec = {"rule": rules[0], "rule_id": "M7_test_rank01",
+           "rule_source": "M7_HCE_optimized"}
+    cfg = {
+        "test_seeds": [7000], "timesteps": 50,
+        "grid": [16, 16, 4, 4],
+        "max_candidates": 3, "hce_replicates": 1,
+        "horizons": [5], "projections": ["mean_threshold"],
+        "cpu_discovery_backend": "numpy",
+    }
+    res = discover_one_cell(
+        rule_record=rec, seed=7000, cfg=cfg,
+        scratch_dir=str(tmp_path),
+    )
+    assert isinstance(res, CellDiscoveryResult)
+    # The returned object must contain only Python scalars / strings /
+    # nested dicts; no numpy arrays in any field. State arrays live on
+    # disk in the npz files referenced by work_files.
+    def _walk(v):
+        if isinstance(v, np.ndarray):
+            raise AssertionError(f"numpy array in payload: {v.shape}")
+        if isinstance(v, dict):
+            for k2, v2 in v.items():
+                _walk(v2)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                _walk(x)
+    _walk(res.cell_meta)
+    # scaffolds: dataclass instances; check field-by-field
+    for k, sc in res.scaffolds.items():
+        for f in (sc.hce_per_replicate_per_horizon,
+                  sc.far_per_replicate_per_horizon):
+            _walk(f)
+    # work_files: dict[projection -> str path]
+    for v in res.work_files.values():
+        assert isinstance(v, str)
+    # And the npz file actually exists and is loadable.
+    for v in res.work_files.values():
+        d = np.load(v)
+        assert "states_orig" in d.files
