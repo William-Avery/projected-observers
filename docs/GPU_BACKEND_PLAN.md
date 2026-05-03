@@ -181,3 +181,33 @@ on GPU output.** Any future GPU-derived production result must:
 
 Until those three conditions hold, GPU is for benchmarking and
 exploration only — not for production claims.
+
+## Stage status (G1 → G4)
+
+| stage | what shipped | result |
+|---|---|---|
+| **G1** | `observer_worlds.backends` (numpy + cupy primitives), benchmark harness, 19 equivalence tests | RTX 3080 Ti benchmark: 500-664× step-loop speedup at B≥32; all binary projections bit-identical; random_linear within 6e-7 |
+| **G2** | GPU-aware projection-robustness runner; preflight equivalence audit | preflight 240/240 candidates matched, max abs HCE delta 6.4e-7 |
+| **G2B** | production-grid equivalence audit (T=500, max_h=80) | 870/870 candidates matched bit-identical for binary; random_linear max 5.4e-7 |
+| **G3** | parallel CPU discovery via ProcessPoolExecutor + as_completed; full Stage 6C-equivalent GPU run | scientifically bit-identical to Stage 6C (26 139/26 139 candidates; posthoc verdict 17/18 + 16/18 matches); end-to-end wall **6.63 h vs Stage 6C CPU 6.48 h** — neutral |
+
+**G3 finding.** GPU rollout itself is solved (499 s vs ≈ 17 500 s of
+equivalent CPU rollout work — 35× phase speedup). The new bottleneck is
+the CPU candidate-discovery half (substrate + projection-stream + tracker
++ perturbation construction, 23 271 s = 97.5% of G3 wall). The runner is
+capped at ≈ 8 effective workers on Windows because joblib loky and
+`concurrent.futures.ProcessPoolExecutor` both crash intermittently with
+Windows access violations in `numpy._sum` (inside `tracking._iou`) and
+`projection.invisible_perturbations._weight_canceling_pair_swap` once
+worker count exceeds ~8 — the same fault pattern observed in Stage 6D
+first attempt on the CPU production runner.
+
+**Next experiment (G4-Linux).** Test whether the worker-count ceiling is
+OS-specific by running the same G3 binary on a Linux host with
+n_workers=30. See `docs/G4_LINUX_GPU_RUNBOOK.md` for the full
+runbook (environment setup, three sequenced runs, equivalence check,
+reporting template). If Linux is clean at n=30, end-to-end wall is
+expected to drop to ≈ 2 h (≈ 3× speedup vs Stage 6C CPU baseline) without
+any code change. If Linux also hits the ceiling, the GPU-discovery
+refactor (G5: port per-frame projection / tracker hot loops to GPU) is
+the next move.
