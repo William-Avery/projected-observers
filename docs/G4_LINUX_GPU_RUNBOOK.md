@@ -349,6 +349,90 @@ After §3.3 + §3.4 complete, fill in this template for the report:
         the Linux host and use that for production. Speedup may be
         intermediate (e.g. 2x rather than 3x).
 
+## 4b. One-shot bootstrap script
+
+If you'd rather not step through §1–4 by hand, the repo ships a
+single-shot bootstrap script that does everything end-to-end:
+
+      chmod +x scripts/g4_linux_bootstrap.sh
+      ./scripts/g4_linux_bootstrap.sh \
+          --stage6c-baseline-dir /path/to/outputs/stage6c_projection_robustness_seed7000_<ts>/
+
+Without the baseline path, the script still runs the smoke + full
+production-grid GPU run but skips the equivalence comparison and
+clearly flags it in the report as "equivalence not run: baseline
+dir missing".
+
+What the script does (in order):
+
+1. Checks `uname -s == Linux`; refuses to run on anything else.
+2. Verifies repo root, prints git branch / commit / dirty state, and
+   confirms the `stage6-replication-complete` tag is reachable.
+3. Verifies `nvidia-smi` works and runs a CuPy probe to confirm the
+   GPU is visible. Writes the probe output to
+   `outputs/g4_linux_cupy_info_<ts>.txt`.
+4. Creates `.venv/` if missing and `pip install -e ".[dev,gpu]"`.
+   Idempotent via the `.g4_state/pip_done` marker — re-running the
+   script after a partial failure skips the install step. Delete that
+   marker to force a reinstall.
+5. Runs `pytest tests/test_gpu_backend.py tests/test_projection_robustness_gpu.py -q`
+   then `pytest tests/ -q`. Records both into per-run log files.
+6. Runs the **n_workers=30 stress smoke** (the gate from §3.2).
+   Parses `stats_summary.json` for the G3 perf block and counts
+   `[discovery] pool died` lines in the log. If any pool restart is
+   detected, the script prints a clear failure message and **does
+   not start the full production run** — exit code 2.
+7. If the smoke gate passes, runs the **full Stage 6C-equivalent
+   production run** (§3.3). Parses its perf block likewise.
+8. If `--stage6c-baseline-dir` was supplied, calls
+   `scripts/g4_compare_to_stage6c.py` to do the row-by-row + posthoc
+   equivalence check and emit `outputs/g4_linux_equivalence_<ts>.{json,md}`.
+9. Writes the final markdown report to
+   `outputs/g4_linux_report_<ts>.md` with system info, all phase
+   metrics, speedup vs Windows G3 (6.63 h) and Stage 6C CPU baseline
+   (6.48 h), the equivalence verdict, and a **recommendation** chosen
+   by:
+
+   * smoke crashed at n=30 → **G5 GPU-discovery refactor** (the
+     ceiling isn't Windows-specific).
+   * full run < 3 h + equivalence pass → **adopt Linux as production
+     target; shelve G5**.
+   * full run 3–4 h + equivalence pass → **acceptable; G5 still worth
+     scoping** for the next workload size increase.
+   * full run > 4 h → **Linux removes crashes but not bottleneck;
+     plan G5**.
+
+   The script's exit code mirrors the recommendation:
+   0=success, 2=smoke gate failed, 3=full run failed,
+   4=equivalence failed.
+
+Useful flags:
+
+      --n-workers N              # default 30; lower if the smoke gate fails
+      --gpu-batch-size N         # default 64
+      --gpu-memory-target-gb F   # default 9.5
+      --skip-tests               # skip both pytest invocations
+      --skip-smoke               # skip the gate (use with care)
+      --skip-full                # do not run the full production run
+      --smoke-only               # run only the smoke gate
+      -h | --help                # print usage
+
+Output you can `scp` back to the dev box for analysis:
+
+      outputs/g4_linux_report_<ts>.md             # human-readable report
+      outputs/g4_linux_equivalence_<ts>.json      # machine-readable equiv
+      outputs/g4_linux_equivalence_<ts>.md
+      outputs/g4_linux_bootstrap_<ts>.log         # full transcript
+      outputs/g4_linux_pytest_*_${{ts}}.log         # both pytest runs
+      outputs/g4_linux_cupy_info_<ts>.txt         # GPU probe output
+      outputs/<full_run_dir>/stats_summary.json   # the run's perf block
+      outputs/<full_run_dir>/perf_profile.json
+      outputs/<full_run_dir>/candidate_metrics.csv
+
+(If disk is tight, the `_workitems/` subdir under the full run
+directory holds the per-cell .npz scratch — about 60 GB. Safe to
+delete after equivalence is verified.)
+
 ## 5. Notes / caveats
 
 * Do not run from Windows. This file is documentation; the dev box's
