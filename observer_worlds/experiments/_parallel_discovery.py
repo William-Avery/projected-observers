@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import os as _os
 
-# Pin BLAS threading to 1 per worker BEFORE numpy / scipy / joblib import.
+# Pin BLAS threading to 1 per worker BEFORE numpy / scipy import.
 # See module docstring for the why.
 for _k in (
     "OMP_NUM_THREADS",
@@ -51,12 +51,12 @@ for _k in (
 ):
     _os.environ.setdefault(_k, "1")
 
+import concurrent.futures as _cf
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-from joblib import Parallel, delayed
 
 from observer_worlds.experiments._followup_projection import (
     _bbox_mask,
@@ -329,23 +329,27 @@ def parallel_discover_all_cells(
     cfg: dict,
     scratch_dir: str,
     n_workers: int,
-    max_retries: int = 3,
+    max_pool_restarts: int = 6,
 ) -> tuple[dict, dict, dict, dict]:
     """Discover candidates for every (rule, seed) cell in parallel.
 
-    Robustness:
-    On Windows joblib/loky we occasionally see ``TerminatedWorkerError``
-    when a worker hits a transient access violation in numpy / scipy
-    (see Stage 6D production-run notes). To keep the GPU runner usable
-    in those conditions, we wrap the parallel sweep in a retry loop:
+    Uses :class:`concurrent.futures.ProcessPoolExecutor` + ``as_completed``
+    so per-cell results are kept even when a sibling worker crashes —
+    the prior joblib-loky implementation aborted the *entire* batch on
+    the first ``TerminatedWorkerError``, wasting all in-flight work.
 
-    1. First attempt: ``n_workers`` workers, joblib loky.
-    2. On ``TerminatedWorkerError`` or any worker-level exception,
-       fall back to single-process execution for the remaining cells.
-       Single-process can't be killed by sibling-worker faults and
-       deterministic per-cell discovery is unchanged. The
-       ``max_retries`` arg only bounds the number of parallel attempts;
-       single-process always runs after them as a final safety net.
+    Robustness model:
+
+    1. Submit all pending cells to a pool of ``n_workers`` workers.
+    2. Drain via ``as_completed``; collect successful results in
+       ``results``. Catch per-future exceptions (e.g. propagated
+       worker faults) and queue those cells for retry.
+    3. On ``BrokenProcessPool`` / unhandled pool death: shut down,
+       restart with the same workers, and resubmit only the cells
+       that have not produced a result yet.
+    4. After ``max_pool_restarts`` attempts, fall back to in-process
+       serial execution for any still-pending cells. Serial can't be
+       killed by sibling-worker faults.
 
     Returns
     -------
@@ -356,82 +360,97 @@ def parallel_discover_all_cells(
     work_files_per_proj
         ``projection -> [npz_path, ...]`` (sorted).
     discovery_stats
-        ``{n_cells, n_workers, n_retries, payload_mb_total}``.
+        ``{n_cells, n_workers, n_pool_restarts, payload_mb_total}``.
     """
     cells = [(rec, seed) for rec in rule_records for seed in cfg["test_seeds"]]
     nw = max(1, int(n_workers))
     results: list[CellDiscoveryResult | None] = [None] * len(cells)
-    n_retries = 0
 
-    def _run_indices(indices: list[int], workers: int) -> list[int]:
-        """Run the cells at ``indices`` in parallel; return the indices
-        that finished successfully (the others stay ``None`` in
-        ``results``)."""
-        if not indices:
-            return []
-        if workers <= 1 or len(indices) <= 1:
-            done = []
-            for i in indices:
-                rec, seed = cells[i]
-                try:
-                    results[i] = discover_one_cell(
-                        rule_record=rec, seed=int(seed),
-                        cfg=cfg, scratch_dir=scratch_dir,
-                    )
-                    done.append(i)
-                except Exception as e:  # noqa: BLE001
-                    print(
-                        f"[discovery] cell ({rec['rule_id']}, {seed}) "
-                        f"failed in serial fallback: {e!r}"
-                    )
-            return done
-        try:
-            sub = Parallel(
-                n_jobs=workers, backend="loky", verbose=0,
-            )(
-                delayed(discover_one_cell)(
-                    rule_record=cells[i][0], seed=int(cells[i][1]),
+    def _serial_fill(indices: list[int]) -> None:
+        for i in indices:
+            rec, seed = cells[i]
+            try:
+                results[i] = discover_one_cell(
+                    rule_record=rec, seed=int(seed),
                     cfg=cfg, scratch_dir=scratch_dir,
                 )
-                for i in indices
-            )
-        except Exception as e:  # noqa: BLE001 - includes TerminatedWorkerError
-            print(
-                f"[discovery] parallel batch crashed "
-                f"({type(e).__name__}: {e!s}); will fall back to "
-                f"single-process for remaining cells."
-            )
-            return []
-        for i, r in zip(indices, sub):
-            results[i] = r
-        return list(indices)
+            except Exception as e:  # noqa: BLE001
+                print(
+                    f"[discovery] cell ({rec['rule_id']}, {seed}) "
+                    f"failed in serial fallback: {e!r}"
+                )
 
-    # Attempt 1: full parallelism.
     pending = list(range(len(cells)))
-    if nw > 1 and len(pending) > 1:
-        done = _run_indices(pending, nw)
+    n_pool_restarts = 0
+
+    if nw <= 1 or len(pending) <= 1:
+        _serial_fill(pending)
         pending = [i for i in pending if results[i] is None]
-        n_retries += 1 if not done else 0
-    # Subsequent attempts at parallel with progressively fewer workers,
-    # then a final single-process pass as the safety net.
-    workers_now = nw
-    while pending and n_retries < max_retries:
-        workers_now = max(1, workers_now // 2)
-        n_retries += 1
-        print(
-            f"[discovery] retry {n_retries}/{max_retries} "
-            f"with workers={workers_now} for {len(pending)} cells."
-        )
-        _run_indices(pending, workers_now)
-        pending = [i for i in pending if results[i] is None]
-    if pending:
-        # Final safety net: serial.
-        print(
-            f"[discovery] serial fallback for {len(pending)} "
-            f"cells that never completed in parallel."
-        )
-        _run_indices(pending, 1)
-        pending = [i for i in pending if results[i] is None]
+    else:
+        attempt = 0
+        while pending and attempt < max_pool_restarts:
+            attempt += 1
+            print(
+                f"[discovery] pool attempt {attempt} "
+                f"with workers={nw} for {len(pending)} pending cells."
+            )
+            this_pending = list(pending)
+            try:
+                with _cf.ProcessPoolExecutor(max_workers=nw) as ex:
+                    fut_to_idx = {
+                        ex.submit(
+                            discover_one_cell,
+                            rule_record=cells[i][0], seed=int(cells[i][1]),
+                            cfg=cfg, scratch_dir=scratch_dir,
+                        ): i
+                        for i in this_pending
+                    }
+                    try:
+                        for fut in _cf.as_completed(fut_to_idx):
+                            i = fut_to_idx[fut]
+                            try:
+                                results[i] = fut.result()
+                            except (
+                                _cf.process.BrokenProcessPool,
+                                _cf.CancelledError,
+                            ) as e:
+                                # Pool died; remaining futures will also
+                                # raise. Break out and let the next
+                                # attempt rebuild the pool.
+                                print(
+                                    f"[discovery] pool died while "
+                                    f"draining (cell idx={i}): "
+                                    f"{type(e).__name__}; will rebuild."
+                                )
+                                break
+                            except Exception as e:  # noqa: BLE001
+                                rec, seed = cells[i]
+                                print(
+                                    f"[discovery] cell ({rec['rule_id']}, "
+                                    f"{seed}) raised in worker: {e!r}; "
+                                    f"will retry."
+                                )
+                    except _cf.process.BrokenProcessPool as e:
+                        print(
+                            f"[discovery] BrokenProcessPool draining: "
+                            f"{e!r}; will rebuild pool."
+                        )
+            except _cf.process.BrokenProcessPool as e:
+                # Pool's __exit__ raised — odd, but tolerable.
+                print(
+                    f"[discovery] BrokenProcessPool on shutdown: {e!r}; "
+                    f"continuing."
+                )
+            n_pool_restarts += 1
+            pending = [i for i in pending if results[i] is None]
+        if pending:
+            print(
+                f"[discovery] serial fallback for {len(pending)} "
+                f"cells that never completed in parallel after "
+                f"{n_pool_restarts} pool attempt(s)."
+            )
+            _serial_fill(pending)
+            pending = [i for i in pending if results[i] is None]
     if pending:
         raise RuntimeError(
             f"Discovery failed for {len(pending)} cells even in serial: "
@@ -457,7 +476,7 @@ def parallel_discover_all_cells(
     discovery_stats = {
         "n_cells": len(cells),
         "n_workers": nw,
-        "n_retries": n_retries,
+        "n_pool_restarts": n_pool_restarts,
         "payload_mb_total": round(payload_total_mb, 1),
     }
     return cell_meta, scaffolds, work_files_per_proj, discovery_stats
